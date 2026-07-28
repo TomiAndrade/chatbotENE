@@ -4,6 +4,25 @@ Bot de WhatsApp para **ENE IA LAB**, laboratorio de IA aplicada en el Polo
 Tecnológico Neuquén. Atiende consultas sobre membresías, eventos y alquiler de
 espacios, y escala a un humano cuando no puede resolver.
 
+## Repositorio y flujo git
+
+- **Remote:** https://github.com/TomiAndrade/chatbotENE.git — repo propio, no
+  parte de `TomiAndrade/monorepo`. Vive como carpeta suelta dentro del
+  monorepo (mismo patrón que `IALAB-WEB`, sin `.gitmodules`): `git status` en
+  la raíz del monorepo lo ve como un gitlink.
+- **Rama de trabajo:** `develop`. **Rama de producción:** `main`, solo recibe
+  merges vía PR desde `develop` — nunca push directo. No hay deploy atado a
+  `main` todavía; es la convención elegida para este repo, no una necesidad
+  técnica como en IALAB-WEB (que sí tiene deploy automático a Netlify).
+
+```bash
+git checkout develop          # siempre trabajar acá
+git commit -m "descripción"
+git push origin develop
+# cuando esté listo para producción:
+gh pr create                  # PR de develop → main, nunca merge directo
+```
+
 El proyecto está planificado en etapas. `spec-etapa1.md` y `spec-etapa2.md` son
 los specs completos de lo implementado y mandan sobre este archivo si algo se
 contradice.
