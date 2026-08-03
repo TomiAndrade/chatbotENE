@@ -28,6 +28,10 @@ MENSAJE_ERROR_GENERICO = (
     "del equipo para que te contacte."
 )
 
+MENSAJE_ERROR_TRANSITORIO = (
+    "Perdón, tuvimos un problema técnico. Probá de nuevo en un momento."
+)
+
 
 def esta_en_horario_atencion(ahora: datetime) -> bool:
     """`ahora` tiene que venir ya convertido a la zona horaria del polo

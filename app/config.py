@@ -19,7 +19,8 @@ class Config:
     debug: bool
     modelo: str
     anthropic_api_key: str
-    gemini_api_key: str
+    base_url: str
+    openai_compat_api_key: str
     timezone: ZoneInfo
     historial_max_mensajes: int
     historial_dias_validez: int
@@ -36,7 +37,8 @@ def _cargar_config() -> Config:
         debug=os.getenv("DEBUG", "false").lower() == "true",
         modelo=os.getenv("MODELO", ""),
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
-        gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
+        base_url=os.getenv("BASE_URL", ""),
+        openai_compat_api_key=os.getenv("OPENAI_COMPAT_API_KEY", ""),
         timezone=ZoneInfo(os.getenv("TIMEZONE", "America/Argentina/Buenos_Aires")),
         historial_max_mensajes=int(os.getenv("HISTORIAL_MAX_MENSAJES", "20")),
         historial_dias_validez=int(os.getenv("HISTORIAL_DIAS_VALIDEZ", "7")),

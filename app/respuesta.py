@@ -42,9 +42,15 @@ PARAMETROS_HERRAMIENTA_ESCALAR = {
 }
 
 # Timeout de la llamada al modelo y política de reintento (ver spec-etapa2.md,
-# "Manejo de errores"): 20 segundos, un solo reintento.
-TIMEOUT_SEGUNDOS = 20.0
+# "Manejo de errores"): 20 segundos en total y un solo reintento.
+#
+# Los 20 segundos son el presupuesto completo, no el de cada intento: lo que
+# importa es cuánto espera el usuario del otro lado de WhatsApp, y con dos
+# intentos de 20s cada uno esa espera se iba a 40s. Se reparte entre los
+# intentos, así que cada llamada tiene 10s.
+PRESUPUESTO_TOTAL_SEGUNDOS = 20.0
 MAX_INTENTOS = 2
+TIMEOUT_SEGUNDOS = PRESUPUESTO_TOTAL_SEGUNDOS / MAX_INTENTOS
 
 
 def con_un_reintento(func: Callable[[], T]) -> T:
@@ -68,6 +74,13 @@ class RespuestaGenerada:
     resumen: str | None
 
 
+class ErrorTransitorioProveedor(Exception):
+    """Un proveedor de IA falló de forma transitoria (saturación, 429, 5xx, o
+    un error de upstream que llegó dentro de un HTTP 200 — ver spec-etapa2.md,
+    "Manejo de errores"). Distinto de una excepción común: en desarrollo no
+    dispara el escalamiento a humano, solo avisa que se reintente."""
+
+
 class ProveedorRespuesta(ABC):
     @abstractmethod
     def generar_respuesta(self, historial: list[Mensaje], mensaje_nuevo: str) -> RespuestaGenerada:
@@ -87,10 +100,10 @@ class ProveedorFijo(ProveedorRespuesta):
         return RespuestaGenerada(texto=self.RESPUESTA_FIJA, escalar=False, resumen=None)
 
 
-def _proveedor_gemini() -> ProveedorRespuesta:
-    from app.proveedor_gemini import ProveedorGemini
+def _proveedor_openai_compat() -> ProveedorRespuesta:
+    from app.proveedor_openai_compat import ProveedorOpenAICompat
 
-    return ProveedorGemini()
+    return ProveedorOpenAICompat()
 
 
 def _proveedor_claude() -> ProveedorRespuesta:
@@ -103,7 +116,7 @@ def _proveedor_claude() -> ProveedorRespuesta:
 # key configurada; con "fijo" — el que usan los tests — ni siquiera hace falta).
 _FABRICAS_PROVEEDORES: dict[str, Callable[[], ProveedorRespuesta]] = {
     "fijo": lambda: ProveedorFijo(),
-    "gemini": _proveedor_gemini,
+    "openai_compat": _proveedor_openai_compat,
     "claude": _proveedor_claude,
 }
 _instancias: dict[str, ProveedorRespuesta] = {}

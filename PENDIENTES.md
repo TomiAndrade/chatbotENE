@@ -4,7 +4,7 @@ Todo lo que queda por hacer, al 31/07/2026, con la etapa 1 cerrada y la etapa 2
 implementada y con tests.
 
 Lo importante primero: **del `spec-etapa2.md` no quedó nada sin implementar en
-código**. Los 35 tests pasan. Lo que falta para poder cerrar la etapa 2 como se
+código**. Los 62 tests pasan. Lo que falta para poder cerrar la etapa 2 como se
 cerró la 1 es la validación contra los servicios reales (punto 1 de acá abajo).
 
 Ordenado por lo que conviene hacer antes, no por importancia absoluta.
@@ -15,8 +15,8 @@ Ordenado por lo que conviene hacer antes, no por importancia absoluta.
 
 La suite de `tests/` mockea Kapso y mockea el proveedor de IA. Eso confirma que
 el wiring interno está bien (historial, escalamiento, límite, manejo de
-errores), pero **todavía no se mandó un solo mensaje real a Gemini ni a
-Claude**, ni se hizo una vuelta completa por WhatsApp con IA de verdad.
+errores), pero **todavía no se mandó un solo mensaje real por `openai_compat`
+ni por Claude**, ni se hizo una vuelta completa por WhatsApp con IA de verdad.
 
 De los 8 criterios de aceptación del `spec-etapa2.md`, sólo el 8 ("los tests
 pasan") está verificado. Los otros siete hay que probarlos a mano, celular →
@@ -40,10 +40,18 @@ el problema está en el prompt, no en el código.
 
 Para correr la prueba hace falta:
 
-- `GEMINI_API_KEY` en `.env` (free tier, sin tarjeta) y `PROVEEDOR_IA=gemini`.
+- Un proveedor con IA de verdad en `.env`. Hay dos caminos:
+  - `PROVEEDOR_IA=openai_compat` con `BASE_URL`, `MODELO` y
+    `OPENAI_COMPAT_API_KEY` (los valores de `.env.example` apuntan a
+    OpenRouter con el free de Nemotron — ver la sección 2 sobre su tasa de
+    fallos).
+  - `PROVEEDOR_IA=claude` con `ANTHROPIC_API_KEY` y `MODELO` (Haiku).
+
   **Ojo:** `.env.example` trae `PROVEEDOR_IA=fijo`, que es el valor correcto
   para desarrollar y para los tests, pero con `fijo` el bot contesta el texto
-  de la etapa 1 y ninguno de los 7 puntos se cumple.
+  de la etapa 1 y ninguno de los 7 puntos se cumple. Ya no existe un proveedor
+  `gemini`: se reemplazó por `openai_compat`, que cubre cualquier endpoint con
+  formato de la API de OpenAI.
 - `uvicorn app.main:app --reload --port 8000` y `ngrok http 8000` (puerto 8000,
   no 3000).
 - La URL de ngrok configurada como webhook en el sandbox de Kapso.
@@ -62,8 +70,9 @@ herramienta `escalar_a_humano`. Se hicieron tres tandas: `tool_choice` forzado,
 **system prompt real del bot** (armado con el propio `app/prompt.py`, no una
 copia).
 
-Nada de esto está implementado: es documentación de lo que se aprendió, y las
-consecuencias para cuando se decida el proveedor definitivo.
+**Ya está todo implementado en `app/proveedor_openai_compat.py`.** Esta sección
+queda como registro de dónde salió cada decisión: lo que sigue describe lo que
+el spike encontró y cómo se resolvió, no trabajo pendiente.
 
 ### Lo que quedó validado
 
@@ -71,36 +80,40 @@ consecuencias para cuando se decida el proveedor definitivo.
   `tool_calls`, `function.name` es `escalar_a_humano` y `function.arguments`
   trae la clave `resumen`.
 - **`function.arguments` viene como string con JSON adentro, no como objeto** —
-  requiere un `json.loads` del lado del proveedor. Es distinto de los dos
-  proveedores actuales, donde el SDK ya entrega un dict
-  (`bloque.input` en Claude, `llamada.args` en Gemini).
+  requiere un `json.loads` del lado del proveedor. Es distinto de Claude, donde
+  el SDK ya entrega un dict (`bloque.input`).
 - **Con el prompt real, el escalamiento se dispara** en el criterio de
   aceptación 3 (alquiler de sala). La respuesta vino con `content: None` —o sea
   que respetó *"No anuncies que vas a escalar ni escribas un mensaje de
   despedida"*— y el resumen reflejaba la regla 10 del prompt: *"El polo ofrece
   este servicio pero el bot no tiene esos datos"*.
 
-### Cambios necesarios si se suma un proveedor OpenAI-compatible
+### Cambios que hubo que hacer para sumar el proveedor OpenAI-compatible
 
 - **OpenRouter devuelve errores adentro de un HTTP 200.** Un fallo llegó como
   `200 OK` con body `{"error":{"message":"Internal error...","code":502}}`.
-  Esto es un agujero real en el manejo de errores: `con_un_reintento`
-  (`app/respuesta.py:50`) reintenta ante **cualquier excepción**, y un 200 no
-  levanta ninguna en un cliente HTTP — así que no habría reintento, el parseo no
-  encontraría `choices` y terminaría como respuesta vacía. El chequeo tiene que
+  Era un agujero real en el manejo de errores: `con_un_reintento`
+  (`app/respuesta.py`) reintenta ante **cualquier excepción**, y un 200 no
+  levanta ninguna en un cliente HTTP — así que no había reintento, el parseo no
+  encontraba `choices` y terminaba como respuesta vacía. El chequeo tenía que
   ser sobre la **clave `error` del body**, no sobre el código HTTP.
   > Ojo con el matiz al leer el código: el reintento por status (429 y 5xx) es
-  > `_conviene_reintentar` en `app/kapso.py:25` y aplica a los **envíos a
+  > `_conviene_reintentar` en `app/kapso.py` y aplica a los **envíos a
   > Kapso**, no a la llamada al modelo. Son dos mecanismos distintos.
 
-  **Esto también hay que reflejarlo en la sección "Manejo de errores" de
-  `spec-etapa2.md`**, que hoy enumera los fallos como "timeout, rate limit,
-  error de la API" asumiendo que todos se manifiestan como excepción.
+  **Resuelto:** `ProveedorOpenAICompat._llamar` chequea la clave `error` del
+  body y levanta `ErrorTransitorioProveedor`. La sección "Manejo de errores"
+  de `spec-etapa2.md` ya lo refleja, y está cubierto por
+  `tests/test_proveedor_openai_compat.py::test_error_adentro_de_un_200_levanta_error_transitorio`.
 - **El `resumen` puede venir mal formado.** Si el tool call llegó pero
   `arguments` no parsea como JSON, o parsea pero no trae `resumen`, **igual hay
   que escalar** (`escalar=True`, `resumen=None`): un `JSONDecodeError` no puede
   tumbar el request. Que el resumen se pierda es peor para quien atienda, pero
   no perder el escalamiento es lo que importa.
+
+  **Resuelto:** `_interpretar_respuesta` atrapa el `JSONDecodeError` y escala
+  con `resumen=None`. Cubierto por
+  `tests/test_proveedor_openai_compat.py::test_arguments_mal_formado_escala_igual_con_resumen_none`.
 
 ### Confiabilidad del free tier y sus consecuencias
 
@@ -113,16 +126,21 @@ consecuencias para cuando se decida el proveedor definitivo.
 - **Consecuencia práctica sobre la regla "error → escalar":** con esa tasa de
   fallos, cerca de una de cada dos conversaciones de prueba va a quedar trabada
   en `modo_humano` sin que haya pasado nada malo con el bot.
-- **Decisión pendiente: distinguir el error transitorio del proveedor del resto,
-  al menos en desarrollo.** Un error transitorio debería responder "problema
-  técnico, probá de nuevo" y **no** prender `modo_humano`. En producción con un
-  proveedor pago, escalar sigue siendo lo correcto — la regla actual no está
-  mal, le falta el caso de desarrollo.
+- **Distinguir el error transitorio del proveedor del resto, al menos en
+  desarrollo.** Un error transitorio debe responder "problema técnico, probá de
+  nuevo" y **no** prender `modo_humano`. En producción con un proveedor pago,
+  escalar sigue siendo lo correcto — la regla original no estaba mal, le
+  faltaba el caso de desarrollo.
+
+  **Resuelto:** `ErrorTransitorioProveedor` (`app/respuesta.py`) más la rama
+  por `DEBUG` en `main.responder`. Cubierto por
+  `tests/test_error_transitorio.py`.
 - **Hace falta un script de reset de `modo_humano` por teléfono.** No es un
   nice-to-have: los criterios de aceptación 5, 6 y 7 **no se pueden probar sin
   él**, porque el criterio 4 (el bot deja de responder tras escalar) corta la
-  conversación. Hoy `modo_humano` se desmarca a mano en la base. Con la tasa de
-  fallos de arriba se va a usar seguido.
+  conversación. Con la tasa de fallos de arriba se va a usar seguido.
+
+  **Resuelto:** `scripts/resetear_modo_humano.py <telefono>`.
 
 ### Costo del prompt y elección de proveedor
 
@@ -160,9 +178,11 @@ knowledge base, no lo achica.
 
 Valida el contrato de tool calling y que el prompt real induce el escalamiento
 en el criterio 3. **No valida el bot.** Sigue faltando todo lo de la sección 1:
-reconfirmar contra el proveedor que se termine usando (hoy `PROVEEDOR_IA` solo
-conoce `fijo`/`gemini`/`claude` — Nemotron vía OpenRouter no es ninguno de
-esos) y la vuelta completa por WhatsApp.
+reconfirmar contra el proveedor que se termine usando y la vuelta completa por
+WhatsApp. El spike corrió fuera del repo, contra un script suelto; que ahora
+exista `PROVEEDOR_IA=openai_compat` (que sí cubre Nemotron vía OpenRouter, y
+cualquier otro endpoint con formato OpenAI) no reemplaza esa prueba: es código
+distinto del que se spikeó.
 
 ---
 
@@ -248,29 +268,64 @@ lo primero que se quiere hacer cuando algo sale raro en producción.
 
 ---
 
-## 7. Endurecer el chequeo de respuesta vacía
+## 7. Endurecer el chequeo de respuesta vacía — resuelto
 
-`app/main.py:151` chequea `resultado.texto is None`. Un texto de sólo espacios
-pasa ese chequeo y después cae en el `if resultado.texto:` de más abajo, que lo
-trata como vacío pero ya no escala: el usuario se queda sin respuesta, que es
-justo lo que el spec pide evitar.
-
-Hoy no puede pasar, porque los dos proveedores filtran los bloques de texto
-vacíos antes de acumularlos. Cambiar la condición a
-`if not resultado.texto or not resultado.texto.strip()` lo cierra del todo. Es
-endurecimiento preventivo, no un incumplimiento del spec.
+**Aplicado.** `app/main.py` chequeaba `resultado.texto is None`; un texto de
+sólo espacios pasaba ese chequeo y cala hasta el `if resultado.texto:` de más
+abajo sin escalar. La condición ahora es
+`if (not resultado.texto or not resultado.texto.strip()) and not resultado.escalar`,
+que cierra el caso. Cubierto por
+`tests/test_fallo_modelo.py::test_respuesta_de_solo_espacios_sin_escalar_tambien_se_trata_como_error`.
 
 ---
 
 ## 8. Deuda técnica menor
 
+Anotada, no implementada. Ninguna rompe nada hoy; están acá para que no haya
+que redescubrirlas.
+
 - **Feriados.** Se tratan como día hábil, así que un 25 de mayo a las 11 el bot
   promete que responden "en breve". Está declarado como deuda conocida en el
-  spec y anotado en `app/mensajes.py:35`.
+  spec y anotado en `app/mensajes.py`.
 - **`@app.on_event` está deprecado** en la versión de FastAPI del proyecto
-  (`app/main.py:54,59`); la suite lo muestra como `DeprecationWarning` en cada
+  (`app/main.py`); la suite lo muestra como `DeprecationWarning` en cada
   corrida. Lo que corresponde es un handler de `lifespan`. Funciona igual, pero
   el warning va a seguir apareciendo y en algún momento se va a romper.
+- **El camino público de `openai_compat` no está cubierto por tests.**
+  `tests/test_proveedor_openai_compat.py` ataca `_interpretar_respuesta` y
+  `_llamar` por separado, nunca `generar_respuesta`. Queda sin verificar que el
+  mensaje `system` con el `SYSTEM_PROMPT` efectivamente se mande, que `tools`
+  viaje en el payload, y que `_a_mensaje_openai` mapee bien los roles —
+  incluido el prefijo `[Respuesta de una persona del equipo]`. Si alguien borra
+  la línea del system prompt, la suite queda verde y el bot pierde todo el
+  knowledge base. `tests/test_proveedor_claude.py` sí cubre el equivalente del
+  lado de Claude y sirve de modelo para escribirlo.
+- **`ProveedorClaude` nunca levanta `ErrorTransitorioProveedor`.** Sólo
+  `openai_compat` clasifica 429/5xx como transitorios. Con
+  `PROVEEDOR_IA=claude` y `DEBUG=true`, un `overloaded_error` de Anthropic
+  escala a humano en vez de pedir que se reintente. En producción no cambia
+  nada (ahí escalar es lo correcto, y es lo que hace), así que sólo molesta si
+  se desarrolla contra Claude.
+- **`con_un_reintento` reintenta fallos deterministas.** Reintenta ante
+  **cualquier** excepción, incluido un 401 por API key inválida, que va a
+  fallar igual las dos veces. `app/kapso.py` sí distingue con
+  `_conviene_reintentar`; la capa del modelo no. Cumple el spec ("no reintentar
+  más de una vez") pero gasta una request y duplica la latencia en fallos que
+  no pueden salir distinto.
+- **Se guarda en la base el texto sin truncar.** `KapsoClient` trunca a 4096
+  caracteres antes de enviar (`app/kapso.py`), pero `enviar_y_guardar` persiste
+  el `texto` completo. La base —y por lo tanto el historial que vuelve al
+  modelo— contiene texto que el usuario nunca vio. Con el prompt pidiendo
+  respuestas cortas es improbable, pero la divergencia está.
+- **El aviso de límite depende de una igualdad exacta.**
+  `main.procesar_mensaje_entrante` dispara el aviso sólo cuando
+  `conteo_ultima_hora == config.limite_mensajes_hora + 1`. Si dos mensajes
+  cruzan el límite concurrentemente y ambos cuentan lo mismo, nadie ve el `+1`
+  exacto y **el aviso no se manda nunca**: silencio total sin explicación,
+  contra lo que pide el spec ("Responder una vez avisando"). Con SQLite no se
+  reproduce porque serializa las escrituras; **con Postgres en producción el
+  escenario se abre**. La forma robusta sería un `>=` con un flag persistido de
+  "ya avisé en esta ventana".
 
 ---
 

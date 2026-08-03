@@ -5,6 +5,5 @@ python-dotenv
 httpx
 psycopg2-binary
 anthropic
-google-genai
 tzdata
 pytest

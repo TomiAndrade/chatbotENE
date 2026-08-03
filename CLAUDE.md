@@ -37,8 +37,8 @@ Kapso → ngrok → servidor → respuesta en el WhatsApp.
 código completo y con tests, pero sin validar contra servicios reales.** La
 suite de `tests/` mockea tanto Kapso como el proveedor de IA — confirma que el
 wiring interno es correcto (historial, escalamiento, límite, manejo de
-errores), pero **todavía no se probó un mensaje real contra Gemini ni contra
-Claude, ni una vuelta completa por WhatsApp con IA real**. Antes de dar la
+errores), pero **todavía no se probó un mensaje real contra `openai_compat` ni
+contra Claude, ni una vuelta completa por WhatsApp con IA real**. Antes de dar la
 etapa por cerrada como la 1, hace falta esa prueba real con al menos un
 proveedor.
 
@@ -50,16 +50,25 @@ bot se guarda con `wa_message_id = None`**. Kapso devuelve el id en
 `messages[0].id` al enviar, y el campo del modelo existe justo para eso, pero
 todavía no se persiste.
 
+**`PENDIENTES.md` tiene la lista completa de lo que falta**, ordenada por
+prioridad: la validación real de la etapa 2, los `[PENDIENTE]` del knowledge
+base a completar con el equipo, el checklist de deploy y la deuda técnica menor.
+Ese archivo es la fuente de verdad de los pendientes; acá abajo sólo están los
+que hacen falta para entender el diseño.
+
 ## Stack
 
 - Python 3.11+, FastAPI, SQLAlchemy (ORM obligatorio, nada de SQL crudo)
 - SQLite en desarrollo, Postgres en producción — migrar es cambiar
   `DATABASE_URL`, nada más
-- httpx para las llamadas a Kapso, python-dotenv para la config
+- httpx para las llamadas a Kapso y al proveedor `openai_compat`, python-dotenv
+  para la config
 - ngrok para exponer el webhook en desarrollo (externo, no es parte del código)
 - **Kapso** (https://docs.kapso.ai) como capa sobre la WhatsApp Cloud API de Meta
-- **anthropic** (Claude, producción) y **google-genai** (Gemini, desarrollo)
-  como proveedores de IA intercambiables por `PROVEEDOR_IA`
+- **anthropic** (Claude, producción) y **`openai_compat`** (desarrollo: un solo
+  proveedor parametrizado por `BASE_URL`, sirve para cualquier endpoint con
+  formato de la API de OpenAI — OpenRouter, DeepSeek, el free de NVIDIA, un
+  modelo local) como proveedores de IA intercambiables por `PROVEEDOR_IA`
 - **tzdata**: necesario en Windows para que `zoneinfo` resuelva
   `America/Argentina/Buenos_Aires` (no hay base de tz del sistema operativo)
 
@@ -84,7 +93,7 @@ todavía no se persiste.
   log, no como 500 en el panel de Kapso.
 - **Toda la generación de respuestas vive detrás de
   `generar_respuesta(historial, mensaje_nuevo) -> RespuestaGenerada`**
-  (`respuesta.py`), seleccionable con `PROVEEDOR_IA` (`fijo`/`gemini`/`claude`).
+  (`respuesta.py`), seleccionable con `PROVEEDOR_IA` (`fijo`/`openai_compat`/`claude`).
   Agregar un proveedor nuevo es una clase en `app/proveedor_<nombre>.py` que
   implemente `ProveedorRespuesta`, sumada a `_FABRICAS_PROVEEDORES`; no se toca
   nada más. `RespuestaGenerada` trae `texto`, `escalar` y `resumen` porque con
@@ -105,8 +114,12 @@ todavía no se persiste.
   `America/Argentina/Buenos_Aires`) y el modelo no tiene reloj.
 - **Si falla la llamada al modelo, o vuelve vacía sin escalar, se trata igual:
   disculpa genérica + escalar.** Una conversación en manos de una persona es
-  mejor que una conversación muerta. Timeout de 20s, un solo reintento (ver
-  `con_un_reintento` en `respuesta.py`, compartido entre proveedores).
+  mejor que una conversación muerta. **Presupuesto de 20s en total, no por
+  intento**: con un solo reintento son 10s cada llamada
+  (`PRESUPUESTO_TOTAL_SEGUNDOS / MAX_INTENTOS` en `respuesta.py`). Lo que
+  importa es cuánto espera el usuario del otro lado de WhatsApp, y 20s por
+  intento hacían 40s de espera. Ver `con_un_reintento`, compartido entre
+  proveedores.
 - **Límite de 30 mensajes de usuario por hora por teléfono** (`app/limite.py`,
   ventana deslizante contada contra la base, no en memoria — sobrevive a un
   reinicio del server). Solo el mensaje que cruza el límite dispara el aviso;
@@ -118,8 +131,22 @@ todavía no se persiste.
 - **Se reintenta solo lo que puede salir distinto**: errores de red, 429 y 5xx,
   con backoff 1s → 2s. Los demás 4xx fallan al primer intento y loguean el body
   de la respuesta de Kapso, que es donde viene el motivo real.
-- **`modo_humano` se chequea antes de responder.** Si el bot escribe encima de
-  un humano, la experiencia se rompe.
+- **`modo_humano` se re-lee de la base justo antes de enviar**
+  (`esta_en_modo_humano` en `main.py`), no sólo al empezar a procesar el
+  mensaje. Si el bot escribe encima de un humano, la experiencia se rompe — y
+  entre el chequeo inicial y el envío hay hasta 20s de llamada al modelo, en
+  los que otra entrega concurrente del mismo número puede haber escalado.
+  Quien no quiere ese chequeo lo pide explícito
+  (`aunque_este_en_modo_humano=True`), y el único que lo hace es el aviso de
+  escalamiento, que sale justo después de prender el flag. `escalar_a_humano`
+  hace la misma relectura y no vuelve a escalar si ya estaba escalada: pisar
+  el resumen del primer escalamiento le saca contexto a quien atienda.
+- **El escalamiento no es atómico y el orden importa.** Primero el commit de
+  `modo_humano`/`resumen`/`escalada_en`, después el `WARNING` de
+  `ESCALADO A HUMANO`, y recién al final el aviso al usuario. Si Kapso está
+  caído el escalamiento ya ocurrió igual, así que tiene que quedar en el log
+  sí o sí; el fallo del aviso se loguea aparte y diciendo qué se perdió, no
+  como un error de envío genérico.
 - **`prompts/system-prompt.md` y `prompts/knowledge-base.md` se leen una sola
   vez al importar `app/prompt.py`** (no en cada mensaje). Los bloques
   `[PENDIENTE]` del knowledge base se dejan tal cual a propósito: le indican al
@@ -168,13 +195,31 @@ desmarca `modo_humano` a mano en la base).
 
 ## Tests
 
-`tests/` con pytest, 35 tests. No pegan a ninguna API real: Kapso se mockea
+`tests/` con pytest, 62 tests. No pegan a ninguna API real: Kapso se mockea
 (`kapso_enviados`, fixture en `tests/conftest.py`) y el proveedor de IA se
 mockea por test parcheando `app.main.generar_respuesta` (`fijo` no necesita
-mock). Usan una base SQLite en un directorio temporal, no `bot.db`. Cubren:
-flujo completo del webhook, matriz de firma, reintentos de Kapso con
-`httpx.MockTransport`, carrera de entregas concurrentes con hilos, armado de
-historial y corte por antigüedad, mensaje de escalamiento según horario,
-escalamiento por tool calling, fallo del modelo, y límite por número.
+mock); los dos proveedores con IA se prueban con dobles (`httpx.MockTransport`
+para `openai_compat`, un cliente falso para `claude`). Usan una base SQLite en
+un directorio temporal, no `bot.db`. Cubren: flujo completo del webhook,
+matriz de firma, reintentos de Kapso, carrera de entregas concurrentes con
+hilos, armado de historial y corte por antigüedad, mensaje de escalamiento
+según horario, escalamiento por tool calling, fallo del modelo, error
+transitorio del proveedor, límite por número, y parseo de tool calls de los
+dos proveedores.
+
+Dos cosas al escribir tests acá, aprendidas de una revisión en la que los
+tests pasaban por un vacío:
+
+- **Afirmar el contenido de lo que se envió, no sólo cuántos mensajes
+  salieron.** Un `assert len(kapso_enviados) == 2` pasa igual si el aviso de
+  escalamiento fuera cualquier texto. Los asserts del aviso van contra las
+  constantes de `app.mensajes` (o contra `AVISOS_DE_ESCALAMIENTO` de
+  `tests/helpers.py`), nunca contra el resultado de llamar a
+  `mensaje_escalamiento()` — comparar contra la propia función hace que los
+  dos lados cambien juntos y el test no detecte nada.
+- **`RelojFijo` (`tests/helpers.py`) para todo lo que dependa de la hora**, con
+  instantes elegidos para que UTC y Buenos Aires no coincidan en qué rama
+  corresponde. Así un `datetime.now()` sin convertir falla el test en vez de
+  pasar de casualidad.
 
 Correr con `pytest` desde `chatbot-polo/`.

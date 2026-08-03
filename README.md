@@ -85,11 +85,12 @@ Cambiar `DATABASE_URL` en `.env` (ej.
 ## Cambiar el proveedor de respuestas
 
 `PROVEEDOR_IA` selecciona la implementación: `fijo` (sin IA, para tests),
-`gemini` (desarrollo, free tier) o `claude` (producción). Completar
-`ANTHROPIC_API_KEY` o `GEMINI_API_KEY` según corresponda, y `MODELO` con el
-nombre del modelo de esa API. Agregar un proveedor nuevo es sumar una clase
-en `app/proveedor_<nombre>.py` y registrarla en `app/respuesta.py` — el resto
-del proyecto no cambia.
+`openai_compat` (desarrollo, cualquier endpoint con formato de la API de
+OpenAI — OpenRouter, DeepSeek, el free de NVIDIA, un modelo local) o `claude`
+(producción). Con `openai_compat` completar `BASE_URL`, `OPENAI_COMPAT_API_KEY`
+y `MODELO`; con `claude`, `ANTHROPIC_API_KEY` y `MODELO`. Agregar un proveedor
+nuevo es sumar una clase en `app/proveedor_<nombre>.py` y registrarla en
+`app/respuesta.py` — el resto del proyecto no cambia.
 
 ## Correr los tests
 

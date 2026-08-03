@@ -20,7 +20,10 @@ task `procesar_mensaje_entrante`:
 
 Starlette corre las background tasks en un threadpool y recién después de
 haber mandado la respuesta HTTP, así que las llamadas bloqueantes de
-SQLAlchemy y httpx no frenan el event loop.
+SQLAlchemy y httpx no frenan el event loop. La contracara es que dos mensajes
+seguidos del mismo número se procesan en paralelo: el chequeo de modo_humano
+del paso 6 puede quedar viejo mientras el modelo piensa, así que se vuelve a
+leer de la base justo antes de enviar (ver `esta_en_modo_humano`).
 """
 
 import json
@@ -37,7 +40,7 @@ from app.historial import construir_historial
 from app.kapso import KapsoClient, verificar_firma_webhook
 from app.limite import mensajes_ultima_hora
 from app.models import Conversacion, Mensaje, RolMensaje
-from app.respuesta import generar_respuesta
+from app.respuesta import ErrorTransitorioProveedor, generar_respuesta
 
 logging.basicConfig(
     level=logging.DEBUG if config.debug else logging.INFO,
@@ -87,17 +90,57 @@ def buscar_o_crear_conversacion(db, telefono: str) -> Conversacion:
         return db.query(Conversacion).filter_by(telefono=telefono).one()
 
 
-def enviar_y_guardar(db, conversacion: Conversacion, texto: str) -> None:
+def esta_en_modo_humano(db, conversacion: Conversacion) -> bool:
+    """Re-lee modo_humano de la base, sin confiar en lo que tenga cargado la
+    sesión.
+
+    Hace falta porque entre el chequeo de modo_humano de
+    `procesar_mensaje_entrante` y el momento de enviar puede pasar bastante
+    tiempo: la llamada al modelo tiene un presupuesto de 20 segundos, y en esa
+    ventana otra entrega concurrente del mismo número puede haber escalado, o
+    alguien del equipo puede haber marcado la conversación a mano. Si no se
+    vuelve a mirar, el bot escribe encima de un humano — que es exactamente lo
+    que el criterio de aceptación 4 del spec-etapa2.md prohíbe.
+    """
+    db.refresh(conversacion)
+    return conversacion.modo_humano
+
+
+def enviar_y_guardar(
+    db,
+    conversacion: Conversacion,
+    texto: str,
+    aunque_este_en_modo_humano: bool = False,
+) -> bool:
     """Envía un texto por Kapso y, si se pudo mandar, lo guarda como mensaje
     del bot. Se usa tanto para la respuesta del modelo como para los avisos
     de escalamiento, límite y error: todos son mensajes "del bot" a efectos
-    del historial."""
+    del historial.
+
+    Antes de enviar vuelve a mirar modo_humano (ver `esta_en_modo_humano`) y
+    descarta el mensaje si la conversación ya pasó a una persona. La única
+    excepción es el aviso de escalamiento, que se manda justo después de
+    prender modo_humano y por eso llega con
+    `aunque_este_en_modo_humano=True`.
+
+    Devuelve True si el mensaje salió; False si se descartó por modo_humano o
+    si Kapso lo rechazó.
+    """
     telefono = conversacion.telefono
+
+    if not aunque_este_en_modo_humano and esta_en_modo_humano(db, conversacion):
+        logger.info(
+            "La conversación con %s pasó a modo humano mientras se generaba la "
+            "respuesta: no se envía nada para no escribir encima de la persona",
+            enmascarar_telefono(telefono),
+        )
+        return False
+
     try:
         kapso_client.enviar_mensaje_texto(telefono, texto)
     except Exception:
         logger.exception("No se pudo enviar un mensaje a %s", enmascarar_telefono(telefono))
-        return
+        return False
 
     mensaje_bot = Mensaje(
         conversacion_id=conversacion.id,
@@ -109,25 +152,46 @@ def enviar_y_guardar(db, conversacion: Conversacion, texto: str) -> None:
     db.commit()
 
     logger.info("Mensaje enviado a %s: %s", enmascarar_telefono(telefono), texto)
+    return True
 
 
 def escalar_a_humano(db, conversacion: Conversacion, resumen: str | None) -> None:
     """Marca la conversación en modo humano, guarda el resumen y avisa al
     usuario con el texto que corresponda según el horario. A partir de acá
-    el bot no vuelve a responder en esta conversación."""
+    el bot no vuelve a responder en esta conversación.
+
+    Si mientras se generaba la respuesta otra entrega ya escaló, no se vuelve
+    a escalar: pisar el resumen del primer escalamiento con el del segundo le
+    saca contexto a quien vaya a atender.
+    """
+    if esta_en_modo_humano(db, conversacion):
+        logger.info(
+            "La conversación con %s ya estaba escalada, no se escala de nuevo",
+            enmascarar_telefono(conversacion.telefono),
+        )
+        return
+
     conversacion.modo_humano = True
     conversacion.resumen_escalamiento = resumen
     conversacion.escalada_en = datetime.now(timezone.utc)
     db.commit()
 
-    ahora_local = datetime.now(config.timezone)
-    aviso = mensajes.mensaje_escalamiento(ahora_local)
-    enviar_y_guardar(db, conversacion, aviso)
-
+    # Va acá, pegado al commit, y no al final: si el envío del aviso falla, el
+    # escalamiento ya ocurrió igual y tiene que quedar en el log sí o sí.
     logger.warning(
         "ESCALADO A HUMANO — %s | resumen: %s",
         enmascarar_telefono(conversacion.telefono), resumen,
     )
+
+    ahora_local = datetime.now(config.timezone)
+    aviso = mensajes.mensaje_escalamiento(ahora_local)
+    if not enviar_y_guardar(db, conversacion, aviso, aunque_este_en_modo_humano=True):
+        logger.error(
+            "La conversación con %s quedó escalada pero NO se pudo enviar el aviso de "
+            "escalamiento: la persona del equipo tiene que responder sin que el usuario "
+            "sepa todavía que su consulta pasó a un humano.",
+            enmascarar_telefono(conversacion.telefono),
+        )
 
 
 def responder(db, conversacion: Conversacion, mensaje_usuario: Mensaje) -> None:
@@ -135,11 +199,39 @@ def responder(db, conversacion: Conversacion, mensaje_usuario: Mensaje) -> None:
     devuelto el modelo: enviar texto, escalar a humano, o ambas cosas. Si la
     llamada al modelo falla o vuelve vacía sin escalar, se avisa el error y
     se escala de todos modos: una conversación en manos de una persona es
-    mejor que una conversación muerta."""
+    mejor que una conversación muerta.
+
+    Excepción: un ErrorTransitorioProveedor (saturación, 429, 5xx, o un error
+    de upstream que llegó dentro de un HTTP 200 — ver spec-etapa2.md) en
+    desarrollo no escala, solo pide que se reintente. Con un proveedor
+    gratuito la tasa de estos errores es alta, y escalar en cada uno dejaría
+    casi toda conversación de prueba en modo_humano sin que haya pasado nada
+    malo con el bot. En producción, con un proveedor pago, la regla no
+    cambia: escala igual que cualquier otro fallo.
+
+    Ninguna de las ramas de acá abajo vuelve a chequear modo_humano a mano:
+    de eso se encargan `enviar_y_guardar` y `escalar_a_humano`, que lo releen
+    de la base justo antes de actuar. La lectura que hizo
+    `procesar_mensaje_entrante` ya quedó vieja para cuando el modelo
+    contesta."""
     historial = construir_historial(db, conversacion, mensaje_usuario)
 
     try:
         resultado = generar_respuesta(historial=historial, mensaje_nuevo=mensaje_usuario.contenido)
+    except ErrorTransitorioProveedor as error:
+        logger.warning(
+            "Error transitorio del proveedor de IA para %s: %s",
+            enmascarar_telefono(conversacion.telefono), error,
+        )
+        if config.debug:
+            enviar_y_guardar(db, conversacion, mensajes.MENSAJE_ERROR_TRANSITORIO)
+        else:
+            enviar_y_guardar(db, conversacion, mensajes.MENSAJE_ERROR_GENERICO)
+            escalar_a_humano(
+                db, conversacion,
+                resumen="Error automático: error transitorio del proveedor de IA.",
+            )
+        return
     except Exception:
         logger.exception(
             "Falló la llamada al modelo para %s", enmascarar_telefono(conversacion.telefono),
@@ -148,7 +240,7 @@ def responder(db, conversacion: Conversacion, mensaje_usuario: Mensaje) -> None:
         escalar_a_humano(db, conversacion, resumen="Error automático: no se pudo generar una respuesta.")
         return
 
-    if resultado.texto is None and not resultado.escalar:
+    if (not resultado.texto or not resultado.texto.strip()) and not resultado.escalar:
         logger.error(
             "El modelo devolvió una respuesta vacía sin escalar para %s",
             enmascarar_telefono(conversacion.telefono),

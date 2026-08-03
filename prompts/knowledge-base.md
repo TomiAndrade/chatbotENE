@@ -126,7 +126,8 @@ Para empresas e instituciones. Incluye **todo lo de Individual**, más:
 
 Todavía no hay información definida. Si alguien consulta, el bot responde que aún no está definido y ofrece tomar el contacto o derivar a ialab@eneneuquen.com.ar. **No estimar fechas ni precios.**
 
-`[PENDIENTE]` Datos bancarios / CBU o alias para la transferencia (¿los envía el bot o se mandan tras la aceptación?).
+**Datos bancarios: el bot nunca los envía.** Ni CBU, ni alias, ni instrucciones de pago, aunque el usuario los pida directamente. Los manda el equipo tras la aceptación de la postulación. Esto no es un dato que falte: es una regla del proyecto y no cambia.
+
 `[PENDIENTE]` Si alguien ingresa a mitad de ciclo, ¿paga desde el mes que entra o hay algún ajuste?
 
 ---
@@ -312,7 +313,7 @@ Canal: ialab@eneneuquen.com.ar (asunto: "Solicito presentación ENE IA LAB")
 - [ ] Cómo se manejan las reservas de espacios y quién las confirma
 - [ ] Agenda de eventos: fuente y responsable de actualizarla
 - [ ] Quién recibe las conversaciones escaladas y en qué horario
-- [ ] Datos bancarios: confirmar que **no** los envía el bot
+- [ ] Datos bancarios: quién los manda y en qué momento. Que **no** los mande el bot ya está decidido y no se discute; lo que falta definir es el circuito humano.
 
 **Pendiente — prioridad media:**
 

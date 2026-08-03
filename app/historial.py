@@ -27,7 +27,12 @@ def construir_historial(db: Session, conversacion: Conversacion, mensaje_actual:
             Mensaje.conversacion_id == conversacion.id,
             Mensaje.id != mensaje_actual.id,
         )
-        .order_by(Mensaje.creado_en.desc())
+        # El id desempata: dos mensajes guardados en el mismo instante (el
+        # texto del modelo y el aviso de escalamiento salen uno detrás del
+        # otro) tienen que quedar en el orden en que se crearon, y no en uno
+        # arbitrario que además puede hacer que el limit descarte el que no
+        # corresponde.
+        .order_by(Mensaje.creado_en.desc(), Mensaje.id.desc())
         .limit(config.historial_max_mensajes)
         .all()
     )
