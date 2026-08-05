@@ -42,7 +42,7 @@ def _post_mensaje(client, wa_message_id: str, texto: str, telefono: str = TELEFO
 def _conversacion_de_prueba() -> Conversacion:
     db = SessionLocal()
     try:
-        return db.query(Conversacion).filter_by(telefono=TELEFONO_DE_PRUEBA).one()
+        return db.query(Conversacion).filter_by(canal="whatsapp", identificador_externo=TELEFONO_DE_PRUEBA).one()
     finally:
         db.close()
 

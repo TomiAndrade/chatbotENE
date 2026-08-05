@@ -3,10 +3,12 @@
 import enum
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Column, DateTime, Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from app.db import Base
+
+CANAL_WHATSAPP = "whatsapp"
 
 
 def ahora_utc() -> datetime:
@@ -21,9 +23,13 @@ class RolMensaje(str, enum.Enum):
 
 class Conversacion(Base):
     __tablename__ = "conversaciones"
+    __table_args__ = (
+        UniqueConstraint("canal", "identificador_externo", name="uq_conversaciones_canal_identificador"),
+    )
 
     id = Column(Integer, primary_key=True)
-    telefono = Column(String, unique=True, index=True, nullable=False)
+    canal = Column(String, nullable=False, default=CANAL_WHATSAPP)
+    identificador_externo = Column(String, nullable=False, index=True)
     modo_humano = Column(Boolean, default=False, nullable=False)
     creada_en = Column(DateTime(timezone=True), default=ahora_utc, nullable=False)
     ultimo_mensaje_en = Column(DateTime(timezone=True), default=ahora_utc, nullable=False)

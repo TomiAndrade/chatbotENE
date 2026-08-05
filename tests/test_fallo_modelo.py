@@ -51,7 +51,7 @@ def test_si_la_llamada_al_modelo_falla_se_disculpa_y_escala(client, kapso_enviad
     _post_mensaje(client, "wamid.error1", "hola")
 
     db = SessionLocal()
-    conversacion = db.query(Conversacion).filter_by(telefono=TELEFONO_DE_PRUEBA).one()
+    conversacion = db.query(Conversacion).filter_by(canal="whatsapp", identificador_externo=TELEFONO_DE_PRUEBA).one()
     db.close()
 
     assert conversacion.modo_humano is True
@@ -68,7 +68,7 @@ def test_respuesta_vacia_sin_escalar_se_trata_como_error(client, kapso_enviados,
     _post_mensaje(client, "wamid.error2", "hola")
 
     db = SessionLocal()
-    conversacion = db.query(Conversacion).filter_by(telefono=TELEFONO_DE_PRUEBA).one()
+    conversacion = db.query(Conversacion).filter_by(canal="whatsapp", identificador_externo=TELEFONO_DE_PRUEBA).one()
     db.close()
 
     assert conversacion.modo_humano is True
@@ -88,7 +88,7 @@ def test_respuesta_de_solo_espacios_sin_escalar_tambien_se_trata_como_error(clie
     _post_mensaje(client, "wamid.error3", "hola")
 
     db = SessionLocal()
-    conversacion = db.query(Conversacion).filter_by(telefono=TELEFONO_DE_PRUEBA).one()
+    conversacion = db.query(Conversacion).filter_by(canal="whatsapp", identificador_externo=TELEFONO_DE_PRUEBA).one()
     db.close()
 
     assert conversacion.modo_humano is True

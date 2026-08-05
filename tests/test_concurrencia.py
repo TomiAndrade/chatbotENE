@@ -19,7 +19,7 @@ CANTIDAD_HILOS = 8
 
 def test_entregas_concurrentes_del_mismo_mensaje_no_duplican(kapso_enviados):
     db = SessionLocal()
-    buscar_o_crear_conversacion(db, TELEFONO_DE_PRUEBA)
+    buscar_o_crear_conversacion(db, "whatsapp", TELEFONO_DE_PRUEBA)
     db.close()
 
     barrera = threading.Barrier(CANTIDAD_HILOS)

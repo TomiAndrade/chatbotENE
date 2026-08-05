@@ -16,14 +16,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.db import SessionLocal
-from app.models import Conversacion
+from app.models import CANAL_WHATSAPP, Conversacion
 
 
-def resetear_modo_humano(telefono: str) -> bool:
+def resetear_modo_humano(identificador_externo: str, canal: str = CANAL_WHATSAPP) -> bool:
     """Devuelve True si encontró y reseteó la conversación, False si no existe."""
     db = SessionLocal()
     try:
-        conversacion = db.query(Conversacion).filter_by(telefono=telefono).first()
+        conversacion = (
+            db.query(Conversacion).filter_by(canal=canal, identificador_externo=identificador_externo).first()
+        )
         if conversacion is None:
             return False
 

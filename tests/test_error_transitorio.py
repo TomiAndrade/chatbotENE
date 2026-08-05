@@ -40,7 +40,7 @@ def test_en_desarrollo_no_escala_y_pide_reintentar(client, kapso_enviados, monke
     _post_mensaje(client, "wamid.transitorio-dev", "hola")
 
     db = SessionLocal()
-    conversacion = db.query(Conversacion).filter_by(telefono=TELEFONO_DE_PRUEBA).one()
+    conversacion = db.query(Conversacion).filter_by(canal="whatsapp", identificador_externo=TELEFONO_DE_PRUEBA).one()
     db.close()
 
     assert conversacion.modo_humano is False
@@ -58,7 +58,7 @@ def test_en_produccion_escala_como_cualquier_otro_fallo(client, kapso_enviados, 
     _post_mensaje(client, "wamid.transitorio-prod", "hola")
 
     db = SessionLocal()
-    conversacion = db.query(Conversacion).filter_by(telefono=TELEFONO_DE_PRUEBA).one()
+    conversacion = db.query(Conversacion).filter_by(canal="whatsapp", identificador_externo=TELEFONO_DE_PRUEBA).one()
     db.close()
 
     assert conversacion.modo_humano is True

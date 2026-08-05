@@ -8,8 +8,8 @@ from app.historial import PREFIJO_HUMANO, construir_historial, mapear_mensaje
 from app.models import Conversacion, Mensaje, RolMensaje
 
 
-def _crear_conversacion(db, telefono: str = "5492990000001") -> Conversacion:
-    conversacion = Conversacion(telefono=telefono)
+def _crear_conversacion(db, identificador_externo: str = "5492990000001") -> Conversacion:
+    conversacion = Conversacion(canal="whatsapp", identificador_externo=identificador_externo)
     db.add(conversacion)
     db.commit()
     db.refresh(conversacion)
@@ -41,7 +41,7 @@ def test_trae_como_maximo_los_ultimos_n_en_orden_cronologico(db, monkeypatch):
 
 
 def test_mensaje_humano_queda_prefijado_al_mapear(db):
-    conversacion = _crear_conversacion(db, telefono="5492990000002")
+    conversacion = _crear_conversacion(db, identificador_externo="5492990000002")
     mensaje = _agregar_mensaje(
         db, conversacion, RolMensaje.HUMANO, "ya te contacto en un rato", datetime.now(timezone.utc)
     )
@@ -53,7 +53,7 @@ def test_mensaje_humano_queda_prefijado_al_mapear(db):
 
 
 def test_mensaje_usuario_y_bot_no_se_prefijan(db):
-    conversacion = _crear_conversacion(db, telefono="5492990000003")
+    conversacion = _crear_conversacion(db, identificador_externo="5492990000003")
     ahora = datetime.now(timezone.utc)
     usuario = _agregar_mensaje(db, conversacion, RolMensaje.USUARIO, "hola", ahora)
     bot = _agregar_mensaje(db, conversacion, RolMensaje.BOT, "¡hola!", ahora)
@@ -65,7 +65,7 @@ def test_mensaje_usuario_y_bot_no_se_prefijan(db):
 def test_corte_por_antiguedad_deja_historial_vacio(db, monkeypatch):
     monkeypatch.setattr(config, "historial_dias_validez", 7)
 
-    conversacion = _crear_conversacion(db, telefono="5492990000004")
+    conversacion = _crear_conversacion(db, identificador_externo="5492990000004")
     hace_8_dias = datetime.now(timezone.utc) - timedelta(days=8)
     _agregar_mensaje(db, conversacion, RolMensaje.USUARIO, "hola, hace mucho", hace_8_dias)
     actual = _agregar_mensaje(db, conversacion, RolMensaje.USUARIO, "hola de nuevo", datetime.now(timezone.utc))
@@ -78,7 +78,7 @@ def test_corte_por_antiguedad_deja_historial_vacio(db, monkeypatch):
 def test_dentro_de_la_validez_no_se_corta(db, monkeypatch):
     monkeypatch.setattr(config, "historial_dias_validez", 7)
 
-    conversacion = _crear_conversacion(db, telefono="5492990000005")
+    conversacion = _crear_conversacion(db, identificador_externo="5492990000005")
     hace_6_dias = datetime.now(timezone.utc) - timedelta(days=6)
     _agregar_mensaje(db, conversacion, RolMensaje.USUARIO, "hola, hace unos días", hace_6_dias)
     actual = _agregar_mensaje(db, conversacion, RolMensaje.USUARIO, "hola de nuevo", datetime.now(timezone.utc))

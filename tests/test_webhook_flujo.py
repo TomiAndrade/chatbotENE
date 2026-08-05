@@ -30,7 +30,7 @@ def test_mensaje_entrante_se_guarda_y_recibe_respuesta(client, kapso_enviados):
     assert respuesta.status_code == 200
 
     db = SessionLocal()
-    conversacion = db.query(Conversacion).filter_by(telefono=TELEFONO_DE_PRUEBA).one()
+    conversacion = db.query(Conversacion).filter_by(canal="whatsapp", identificador_externo=TELEFONO_DE_PRUEBA).one()
     mensajes_guardados = db.query(Mensaje).filter_by(conversacion_id=conversacion.id).order_by(Mensaje.id).all()
     db.close()
 
@@ -43,7 +43,7 @@ def test_mensaje_entrante_se_guarda_y_recibe_respuesta(client, kapso_enviados):
 def test_modo_humano_corta_la_respuesta(client, kapso_enviados, db):
     _post_mensaje(client, "wamid.2", "primer mensaje")
 
-    conversacion = db.query(Conversacion).filter_by(telefono=TELEFONO_DE_PRUEBA).one()
+    conversacion = db.query(Conversacion).filter_by(canal="whatsapp", identificador_externo=TELEFONO_DE_PRUEBA).one()
     conversacion.modo_humano = True
     db.commit()
     kapso_enviados.clear()
@@ -58,7 +58,7 @@ def test_reenviar_el_mismo_webhook_no_duplica(client, kapso_enviados):
     _post_mensaje(client, "wamid.duplicado", "hola de nuevo")
 
     db = SessionLocal()
-    conversacion = db.query(Conversacion).filter_by(telefono=TELEFONO_DE_PRUEBA).one()
+    conversacion = db.query(Conversacion).filter_by(canal="whatsapp", identificador_externo=TELEFONO_DE_PRUEBA).one()
     mensajes_usuario = (
         db.query(Mensaje)
         .filter_by(conversacion_id=conversacion.id, rol=RolMensaje.USUARIO)

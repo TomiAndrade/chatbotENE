@@ -39,7 +39,7 @@ from app.db import SessionLocal, init_db
 from app.historial import construir_historial
 from app.kapso import KapsoClient, verificar_firma_webhook
 from app.limite import mensajes_ultima_hora
-from app.models import Conversacion, Mensaje, RolMensaje
+from app.models import CANAL_WHATSAPP, Conversacion, Mensaje, RolMensaje
 from app.respuesta import ErrorTransitorioProveedor, generar_respuesta
 
 logging.basicConfig(
@@ -64,30 +64,38 @@ def al_apagar() -> None:
     kapso_client.cerrar()
 
 
-def enmascarar_telefono(telefono: str) -> str:
-    """Muestra los primeros 4 y los últimos 2 dígitos, el resto tapado."""
-    if len(telefono) <= 6:
-        return "*" * len(telefono)
-    return telefono[:4] + "*" * (len(telefono) - 6) + telefono[-2:]
+def enmascarar_identificador(identificador: str) -> str:
+    """Muestra los primeros 4 y los últimos 2 caracteres, el resto tapado.
+
+    Pensada originalmente para números de WhatsApp, pero no asume ese formato:
+    no valida dígitos ni longitud de país, solo tapa el medio de la cadena.
+    Sirve igual para un id de sesión de otro canal.
+    """
+    if len(identificador) <= 6:
+        return "*" * len(identificador)
+    return identificador[:4] + "*" * (len(identificador) - 6) + identificador[-2:]
 
 
-def buscar_o_crear_conversacion(db, telefono: str) -> Conversacion:
-    conversacion = db.query(Conversacion).filter_by(telefono=telefono).first()
+def buscar_o_crear_conversacion(db, canal: str, identificador_externo: str) -> Conversacion:
+    conversacion = (
+        db.query(Conversacion).filter_by(canal=canal, identificador_externo=identificador_externo).first()
+    )
     if conversacion is not None:
         return conversacion
 
     try:
-        conversacion = Conversacion(telefono=telefono)
+        conversacion = Conversacion(canal=canal, identificador_externo=identificador_externo)
         db.add(conversacion)
         db.commit()
         db.refresh(conversacion)
         return conversacion
     except IntegrityError:
-        # Otro mensaje del mismo número creó la conversación entre el SELECT
-        # de arriba y este INSERT. La constraint única de telefono frenó al
-        # nuestro: nos quedamos con la que ya existe.
+        # Otro mensaje del mismo identificador creó la conversación entre el
+        # SELECT de arriba y este INSERT. La constraint única de (canal,
+        # identificador_externo) frenó al nuestro: nos quedamos con la que ya
+        # existe.
         db.rollback()
-        return db.query(Conversacion).filter_by(telefono=telefono).one()
+        return db.query(Conversacion).filter_by(canal=canal, identificador_externo=identificador_externo).one()
 
 
 def esta_en_modo_humano(db, conversacion: Conversacion) -> bool:
@@ -126,20 +134,20 @@ def enviar_y_guardar(
     Devuelve True si el mensaje salió; False si se descartó por modo_humano o
     si Kapso lo rechazó.
     """
-    telefono = conversacion.telefono
+    identificador_externo = conversacion.identificador_externo
 
     if not aunque_este_en_modo_humano and esta_en_modo_humano(db, conversacion):
         logger.info(
             "La conversación con %s pasó a modo humano mientras se generaba la "
             "respuesta: no se envía nada para no escribir encima de la persona",
-            enmascarar_telefono(telefono),
+            enmascarar_identificador(identificador_externo),
         )
         return False
 
     try:
-        kapso_client.enviar_mensaje_texto(telefono, texto)
+        kapso_client.enviar_mensaje_texto(identificador_externo, texto)
     except Exception:
-        logger.exception("No se pudo enviar un mensaje a %s", enmascarar_telefono(telefono))
+        logger.exception("No se pudo enviar un mensaje a %s", enmascarar_identificador(identificador_externo))
         return False
 
     mensaje_bot = Mensaje(
@@ -151,7 +159,7 @@ def enviar_y_guardar(
     conversacion.ultimo_mensaje_en = datetime.now(timezone.utc)
     db.commit()
 
-    logger.info("Mensaje enviado a %s: %s", enmascarar_telefono(telefono), texto)
+    logger.info("Mensaje enviado a %s: %s", enmascarar_identificador(identificador_externo), texto)
     return True
 
 
@@ -167,7 +175,7 @@ def escalar_a_humano(db, conversacion: Conversacion, resumen: str | None) -> Non
     if esta_en_modo_humano(db, conversacion):
         logger.info(
             "La conversación con %s ya estaba escalada, no se escala de nuevo",
-            enmascarar_telefono(conversacion.telefono),
+            enmascarar_identificador(conversacion.identificador_externo),
         )
         return
 
@@ -180,7 +188,7 @@ def escalar_a_humano(db, conversacion: Conversacion, resumen: str | None) -> Non
     # escalamiento ya ocurrió igual y tiene que quedar en el log sí o sí.
     logger.warning(
         "ESCALADO A HUMANO — %s | resumen: %s",
-        enmascarar_telefono(conversacion.telefono), resumen,
+        enmascarar_identificador(conversacion.identificador_externo), resumen,
     )
 
     ahora_local = datetime.now(config.timezone)
@@ -190,7 +198,7 @@ def escalar_a_humano(db, conversacion: Conversacion, resumen: str | None) -> Non
             "La conversación con %s quedó escalada pero NO se pudo enviar el aviso de "
             "escalamiento: la persona del equipo tiene que responder sin que el usuario "
             "sepa todavía que su consulta pasó a un humano.",
-            enmascarar_telefono(conversacion.telefono),
+            enmascarar_identificador(conversacion.identificador_externo),
         )
 
 
@@ -221,7 +229,7 @@ def responder(db, conversacion: Conversacion, mensaje_usuario: Mensaje) -> None:
     except ErrorTransitorioProveedor as error:
         logger.warning(
             "Error transitorio del proveedor de IA para %s: %s",
-            enmascarar_telefono(conversacion.telefono), error,
+            enmascarar_identificador(conversacion.identificador_externo), error,
         )
         if config.debug:
             enviar_y_guardar(db, conversacion, mensajes.MENSAJE_ERROR_TRANSITORIO)
@@ -234,7 +242,7 @@ def responder(db, conversacion: Conversacion, mensaje_usuario: Mensaje) -> None:
         return
     except Exception:
         logger.exception(
-            "Falló la llamada al modelo para %s", enmascarar_telefono(conversacion.telefono),
+            "Falló la llamada al modelo para %s", enmascarar_identificador(conversacion.identificador_externo),
         )
         enviar_y_guardar(db, conversacion, mensajes.MENSAJE_ERROR_GENERICO)
         escalar_a_humano(db, conversacion, resumen="Error automático: no se pudo generar una respuesta.")
@@ -243,7 +251,7 @@ def responder(db, conversacion: Conversacion, mensaje_usuario: Mensaje) -> None:
     if (not resultado.texto or not resultado.texto.strip()) and not resultado.escalar:
         logger.error(
             "El modelo devolvió una respuesta vacía sin escalar para %s",
-            enmascarar_telefono(conversacion.telefono),
+            enmascarar_identificador(conversacion.identificador_externo),
         )
         enviar_y_guardar(db, conversacion, mensajes.MENSAJE_ERROR_GENERICO)
         escalar_a_humano(db, conversacion, resumen="Error automático: el modelo no generó una respuesta.")
@@ -256,20 +264,24 @@ def responder(db, conversacion: Conversacion, mensaje_usuario: Mensaje) -> None:
         escalar_a_humano(db, conversacion, resultado.resumen)
 
 
-def procesar_mensaje_entrante(telefono: str, wa_message_id: str, contenido: str) -> None:
+def procesar_mensaje_entrante(identificador_externo: str, wa_message_id: str, contenido: str) -> None:
     """Pasos 4 a 7 del flujo. Corre en background: la request del webhook ya
-    devolvió 200 antes de que esto empiece."""
+    devolvió 200 antes de que esto empiece.
+
+    El webhook solo atiende WhatsApp por ahora, así que el canal queda
+    hardcodeado acá; cuando exista otro canal, esta función pasa a recibirlo
+    como parámetro en vez de asumirlo."""
     db = SessionLocal()
     try:
         ya_existe = db.query(Mensaje).filter_by(wa_message_id=wa_message_id).first()
         if ya_existe is not None:
             logger.info(
                 "Mensaje duplicado de %s (wa_message_id=%s), se descarta",
-                enmascarar_telefono(telefono), wa_message_id,
+                enmascarar_identificador(identificador_externo), wa_message_id,
             )
             return
 
-        conversacion = buscar_o_crear_conversacion(db, telefono)
+        conversacion = buscar_o_crear_conversacion(db, CANAL_WHATSAPP, identificador_externo)
 
         mensaje_usuario = Mensaje(
             conversacion_id=conversacion.id,
@@ -288,26 +300,26 @@ def procesar_mensaje_entrante(telefono: str, wa_message_id: str, contenido: str)
             db.rollback()
             logger.info(
                 "Mensaje duplicado de %s (wa_message_id=%s) detectado al guardar, se descarta",
-                enmascarar_telefono(telefono), wa_message_id,
+                enmascarar_identificador(identificador_externo), wa_message_id,
             )
             return
 
         logger.info(
             "Mensaje de %s guardado (modo_humano=%s): %s",
-            enmascarar_telefono(telefono), conversacion.modo_humano, contenido,
+            enmascarar_identificador(identificador_externo), conversacion.modo_humano, contenido,
         )
 
         if conversacion.modo_humano:
             return
 
-        conteo_ultima_hora = mensajes_ultima_hora(db, telefono)
+        conteo_ultima_hora = mensajes_ultima_hora(db, CANAL_WHATSAPP, identificador_externo)
         if conteo_ultima_hora > config.limite_mensajes_hora:
             # Solo el mensaje que recién cruza el límite dispara el aviso.
             # Los siguientes, mientras siga por encima, quedan en silencio.
             if conteo_ultima_hora == config.limite_mensajes_hora + 1:
                 logger.warning(
                     "Límite de mensajes por hora superado por %s (%s en la última hora)",
-                    enmascarar_telefono(telefono), conteo_ultima_hora,
+                    enmascarar_identificador(identificador_externo), conteo_ultima_hora,
                 )
                 enviar_y_guardar(db, conversacion, mensajes.MENSAJE_LIMITE_ALCANZADO)
             return
@@ -341,18 +353,18 @@ async def recibir_webhook(
     conversacion_payload = payload.get("conversation", {})
 
     wa_message_id = mensaje.get("id")
-    telefono = mensaje.get("from") or conversacion_payload.get("phone_number")
+    identificador_externo = mensaje.get("from") or conversacion_payload.get("phone_number")
     tipo = mensaje.get("type")
     if tipo == "text":
         contenido = mensaje.get("text", {}).get("body", "")
     else:
         contenido = f"[mensaje de tipo '{tipo}' no soportado en esta etapa]"
 
-    if not telefono or not wa_message_id:
+    if not identificador_externo or not wa_message_id:
         logger.warning("Payload de webhook incompleto, se descarta: %s", payload)
         return {"status": "payload incompleto"}
 
-    background_tasks.add_task(procesar_mensaje_entrante, telefono, wa_message_id, contenido)
+    background_tasks.add_task(procesar_mensaje_entrante, identificador_externo, wa_message_id, contenido)
     return {"status": "ok"}
 
 

@@ -86,6 +86,20 @@ que hacen falta para entender el diseño.
 
 ## Decisiones de diseño
 
+- **`Conversacion` está preparada para múltiples canales, aunque hoy solo existe
+  WhatsApp.** En vez de `telefono`, el modelo tiene `canal` (default `whatsapp`)
+  e `identificador_externo` (el número de teléfono, para WhatsApp; un id de
+  sesión, para un futuro chat web). La unicidad es el par `(canal,
+  identificador_externo)`, no el identificador solo — nada garantiza que un id
+  de sesión de otro canal no coincida con un número de teléfono. Todo lo que
+  antes filtraba por `telefono` (`buscar_o_crear_conversacion`,
+  `mensajes_ultima_hora`, `scripts/resetear_modo_humano.py`) ahora recibe los
+  dos campos; `procesar_mensaje_entrante` sigue tomando un solo identificador
+  porque el webhook solo atiende WhatsApp, y hardcodea `canal=whatsapp` al
+  buscar o crear la conversación. `enmascarar_identificador` (antes
+  `enmascarar_telefono`) sigue tapando el medio de la cadena sin asumir formato
+  de teléfono, así que sirve igual para un id de otro canal. No se implementó
+  nada del canal web todavía — es solo el modelo de datos.
 - **El endpoint `/webhook` no toca la base ni la red.** Verifica firma, parsea y
   encola; dedup, guardado y respuesta corren en la background task
   `procesar_mensaje_entrante`, que Starlette ejecuta en threadpool después de
@@ -120,10 +134,12 @@ que hacen falta para entender el diseño.
   importa es cuánto espera el usuario del otro lado de WhatsApp, y 20s por
   intento hacían 40s de espera. Ver `con_un_reintento`, compartido entre
   proveedores.
-- **Límite de 30 mensajes de usuario por hora por teléfono** (`app/limite.py`,
-  ventana deslizante contada contra la base, no en memoria — sobrevive a un
-  reinicio del server). Solo el mensaje que cruza el límite dispara el aviso;
-  los siguientes, mientras siga por encima, quedan en silencio total.
+- **Límite de 30 mensajes de usuario por hora por conversación** (`app/
+  limite.py`, ventana deslizante contada contra la base, no en memoria —
+  sobrevive a un reinicio del server), contado por el par `(canal,
+  identificador_externo)`, no solo por identificador. Solo el mensaje que
+  cruza el límite dispara el aviso; los siguientes, mientras siga por encima,
+  quedan en silencio total.
 - **La dedup es por `wa_message_id`**, con el `SELECT` previo y además
   `IntegrityError` atrapado: entregas concurrentes del mismo webhook pasan las
   dos el chequeo, y la constraint única es la que decide. Los reintentos de
