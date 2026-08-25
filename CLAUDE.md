@@ -167,6 +167,22 @@ que hacen falta para entender el diseño.
   vez al importar `app/prompt.py`** (no en cada mensaje). Los bloques
   `[PENDIENTE]` del knowledge base se dejan tal cual a propósito: le indican al
   modelo qué no sabe, que es lo que necesita para escalar en vez de inventar.
+- **El knowledge base ya no es un esqueleto con huecos.** En agosto de 2026
+  ENE respondió una ronda de consultas y se completó casi todo: precios,
+  capacidad y equipamiento de los ocho espacios, condiciones comerciales y de
+  facturación, acceso por FACE ID, horario real. Quedan 10 bloques
+  `[PENDIENTE]` (eran 42) y el prompt pasó de 37.517 a ~66.000 caracteres.
+  **Consecuencia que rompe supuestos viejos: el bot ahora informa precios de
+  espacios y sólo escala para reservar.** Cualquier nota anterior que diga
+  "alquiler de espacios → escala siempre" está desactualizada. Lo mismo con
+  la agenda de eventos: ya no escala, deriva a la web del IA LAB o al
+  Instagram de ENE.
+- **El horario de atención es 8–18, de lunes a viernes, en un solo lugar.**
+  `app/mensajes.py` lo define en `HORARIO_ATENCION_DESDE`/`HASTA` y el texto
+  del aviso fuera de horario lo interpola desde ahí. Estuvo hardcodeado como
+  "de 9 a 17" en el mensaje y quedó desincronizado del knowledge base cuando
+  el horario real cambió: el bot decía un horario si se lo preguntaban y otro
+  al escalar. No volver a escribirlo a mano.
 
 ## Reglas del proyecto
 
@@ -196,6 +212,13 @@ El deploy está fuera de alcance por ahora, pero esto hay que resolverlo antes:
   falle fuerte en vez de en silencio.
 - **Para producción, además:** `PROVEEDOR_IA=claude` con `ANTHROPIC_API_KEY` y
   `MODELO` apuntando a un modelo chico y rápido (Haiku), no al más grande.
+- **Que alguien se entere cuando el bot escala.** Hoy no pasa nada: se prende
+  `modo_humano` y se escribe un `WARNING` que nadie mira, mientras al usuario
+  se le prometió que "en breve te responden". Decidido que el aviso va **por
+  mail, no por WhatsApp**: un mensaje iniciado por el negocio fuera de la
+  ventana de 24 horas necesita plantilla aprobada por Meta y se cobra por
+  conversación, o sea que sería pagar por cada escalamiento. Ver PENDIENTES.md
+  sección 1.b.
 
 ## Etapas siguientes
 
@@ -211,7 +234,7 @@ desmarca `modo_humano` a mano en la base).
 
 ## Tests
 
-`tests/` con pytest, 62 tests. No pegan a ninguna API real: Kapso se mockea
+`tests/` con pytest, 63 tests. No pegan a ninguna API real: Kapso se mockea
 (`kapso_enviados`, fixture en `tests/conftest.py`) y el proveedor de IA se
 mockea por test parcheando `app.main.generar_respuesta` (`fijo` no necesita
 mock); los dos proveedores con IA se prueban con dobles (`httpx.MockTransport`

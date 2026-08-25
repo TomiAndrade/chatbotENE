@@ -23,20 +23,36 @@ pasan") está verificado. Los otros siete hay que probarlos a mano, celular →
 sandbox de Kapso → ngrok → servidor, igual que en la prueba end-to-end de la
 etapa 1:
 
-1. Se escribe "hola" y el bot se presenta como asistente de ENE.
+1. Se escribe "hola" y el bot se presenta como asistente de ENE, **no** del
+   IA LAB.
 2. Se pregunta el precio de la membresía individual y responde $85.000, corto y
    sin markdown.
-3. Se pregunta por alquiler de una sala y **escala**: `modo_humano` en `true`,
+3. Se pregunta cuánto sale la sala de reuniones y **responde** (USD 100 la
+   jornada, hasta 16 personas, + IVA) **sin escalar**. Después se pide
+   reservarla para una fecha y ahí sí **escala**: `modo_humano` en `true`,
    resumen guardado, y llega el aviso que corresponde al horario.
 4. A partir de ahí el bot **no responde más** en esa conversación.
 5. Se pregunta una receta de cocina y redirige **sin** escalar.
-6. Se pregunta algo relacionado pero ausente del knowledge base (si hay
-   bicicletero, por ejemplo) y **escala** en vez de rechazarlo como fuera de
-   tema.
-7. Se pregunta el precio de una oficina y **no inventa** un número.
+6. Se pregunta algo relacionado pero ausente del knowledge base y **escala** en
+   vez de rechazarlo como fuera de tema. Elegir el ejemplo contra el KB del
+   día: creció mucho y varios huecos viejos ya no lo son. Sirven el bicicletero
+   o la acústica de la sala de podcast.
+7. Se pregunta cuánto sale un seat **por día** —el único CONSULTAR de la
+   sección 11— y **no inventa** un número, teniendo el precio del seat mensual
+   y el de la oficina por día al lado en la misma tabla.
+8. Se pregunta qué actividades hay este mes y **no escala**: manda a la web del
+   IA LAB o al Instagram de ENE, sin inventar fechas.
 
 El punto 6 es el que más suele fallar. Si el bot lo rechaza como fuera de tema,
-el problema está en el prompt, no en el código.
+el problema está en el prompt, no en el código. El 7 es el nuevo candidato:
+tener precios cerca del hueco invita a interpolar mucho más que no tener
+ninguno.
+
+Estos criterios se revisaron en agosto de 2026, cuando la ronda de datos de ENE
+llenó la sección 11 del knowledge base. Los viejos 3 y 7 se aprobaban con el
+comportamiento equivocado: el 3 pedía escalar ante cualquier consulta de
+alquiler, y el 7 daba por buena la respuesta si el bot **no** decía el precio de
+una oficina, que ahora sabe.
 
 Para correr la prueba hace falta:
 
@@ -57,6 +73,46 @@ Para correr la prueba hace falta:
 - La URL de ngrok configurada como webhook en el sandbox de Kapso.
 
 No requiere cambios de código.
+
+---
+
+## 1.b. Avisarle al equipo cuando el bot escala — bloqueante de producción
+
+**Hoy nadie se entera de un escalamiento.** El bot le dice al usuario *"tu
+consulta pasó a una persona del equipo, en breve te responden por acá"*, prende
+`modo_humano` y escribe un `WARNING` en el log. Eso es todo. Si nadie está
+mirando el log o el panel de Kapso, la conversación queda muerta con una
+promesa hecha. El bot **no puede salir a producción así**: es peor que no tener
+bot, porque el usuario se queda esperando.
+
+**Decidido: se notifica por mail, no por WhatsApp.** Mandarle un WhatsApp al
+equipo parece lo natural porque la plomería de envío ya está hecha, pero un
+mensaje iniciado por el negocio fuera de la ventana de 24 horas necesita
+plantilla aprobada por Meta y **se cobra por conversación**: sería pagar por
+cada escalamiento, más el trámite de aprobación de la plantilla. El mail no
+cuesta nada ni tiene plantillas que aprobar. Que quede escrito para no volver a
+discutirlo.
+
+Lo que hace falta:
+
+- Un módulo de mail con las credenciales SMTP en `.env` (host, usuario,
+  password y casilla destino), fuera del repo como el resto de las claves.
+- El mail se manda **después** del commit de `modo_humano`, nunca antes, y su
+  fallo **no puede romper el escalamiento** — mismo orden y mismo criterio que
+  el aviso al usuario (ver "El escalamiento no es atómico y el orden importa"
+  en `CLAUDE.md`). Si el SMTP falla, se loguea diciendo qué se perdió.
+- Contenido mínimo del mail: el número del usuario, el resumen que dejó el
+  modelo, y la hora. Quien atiende tiene que poder ir al panel de Kapso y
+  encontrar la conversación sin leerla entera.
+- **No se da por terminado con tests.** Es una integración externa: hasta que no
+  llegue un mail de verdad a la casilla, está mockeado nomás.
+
+Esto agranda el alcance: `spec-etapa2.md` lista "notificaciones al equipo cuando
+se escala" como explícitamente fuera de alcance. Se decidió sumarlo en agosto de
+2026 al ver que sin esto el escalamiento no existe en la práctica.
+
+Sigue abierto **quién** es esa persona y con qué casilla. El horario ya no:
+es 8–18 de lunes a viernes, unificado con el del edificio (`app/mensajes.py`).
 
 ---
 
@@ -87,6 +143,14 @@ el spike encontró y cómo se resolvió, no trabajo pendiente.
   que respetó *"No anuncies que vas a escalar ni escribas un mensaje de
   despedida"*— y el resumen reflejaba la regla 10 del prompt: *"El polo ofrece
   este servicio pero el bot no tiene esos datos"*.
+
+  **Ojo al releer esto:** el spike corrió contra el KB de julio, cuando el bot
+  no tenía ningún precio de espacios y escalar era la única respuesta posible.
+  Con el KB de agosto ese mismo mensaje **no debe escalar**: tiene que
+  responder el precio. El criterio 3 se reescribió en `spec-etapa2.md` y ahora
+  distingue preguntar el precio (responde) de pedir una reserva (escala). Lo
+  que este hallazgo sigue validando es el contrato de tool calling, no el
+  comportamiento esperado ante esa pregunta.
 
 ### Cambios que hubo que hacer para sumar el proveedor OpenAI-compatible
 
@@ -144,7 +208,7 @@ el spike encontró y cómo se resolvió, no trabajo pendiente.
 
 ### Costo del prompt y elección de proveedor
 
-El system prompt real (`system-prompt.md` + `knowledge-base.md`) son **37.517
+El system prompt real (`system-prompt.md` + `knowledge-base.md`) eran **37.517
 caracteres = 10.371 tokens**, con 36 bloques `[PENDIENTE]`. **Veníamos
 estimando ~3.000 tokens**, o sea más del triple. Eso reordena las opciones:
 
@@ -154,8 +218,18 @@ estimando ~3.000 tokens**, o sea más del triple. Eso reordena las opciones:
 | DeepSeek | El bono de 5M tokens rinde **~470 llamadas, no ~1.600**. |
 | OpenRouter | **No se ve afectado**: su límite es por request, no por token. |
 
-Y va a seguir creciendo: completar los `[PENDIENTE]` de la sección 3 agranda el
-knowledge base, no lo achica.
+Y siguió creciendo, como estaba previsto. Tras la ronda de agosto de 2026 (los
+precios de espacios, las condiciones comerciales y todo lo de la sección 3) el
+prompt está en **56.079 caracteres**: 18.562 más, un **+50%**. La medición de
+tokens de arriba fue real y ésta no — aplicando el mismo ratio de aquella
+(3,617 caracteres por token) da **~15.500 tokens**, y el bono de DeepSeek
+bajaría de ~470 llamadas a **~320**. Hay que volver a medirlo de verdad contra
+el proveedor que se termine usando, no arrastrar la regla de tres.
+
+Completar los `[PENDIENTE]` que quedan lo agranda todavía más. Sigue siendo
+prefijo cacheable, así que el crecimiento es barato **si el caché funciona** —
+lo que refuerza la prioridad de medir la tasa real de cache hit, no darla por
+sentada.
 
 ### Cómo testear esto (aprendizajes de método)
 
@@ -194,30 +268,44 @@ inventar. Están bien así para desarrollar, pero **antes de producción hay que
 completarlos con el equipo**, porque cada uno es una consulta que hoy termina en
 un humano.
 
-Dos bloques están vacíos enteros:
+**Ronda de agosto 2026 — una parte importante ya se completó.** El equipo de ENE
+respondió por mail y de ahí salieron: horario real (8–18, sin feriados), acceso
+por FACE ID, la tabla completa de precios y equipamiento de los ocho espacios
+(sección 11), las condiciones comerciales y de facturación (sección 12 —
+sección nueva), domicilio postal, política de logos, el circuito para organizar
+eventos y la cafetería. La lista de decisiones que se aplicó vivía en
+`cambios-kb-y-prompt.md`, ya borrado; lo que sobrevive de ese documento está en
+el KB: los pendientes en su checklist final y, al pie, la tabla de **datos que
+quedan deliberadamente afuera** (estructura societaria, link del grupo de
+WhatsApp, mails de comprobantes, representante legal, nombres de las
+plataformas de firma y facturación). Esa tabla existe para que nadie los agregue
+más adelante "completando huecos": son decisiones, no olvidos.
 
-- **Eventos** (sección 8) — no hay nada. Falta definir si existe una agenda
-  publicada, si el bot la lee de una fuente automática (Google Calendar, una
-  página) o se carga a mano, y los datos de cada evento: nombre, fecha, hora,
-  lugar, si es abierto o sólo para miembros, si requiere inscripción y el link.
-- **Alquiler de espacios del polo** (sección 11) — faltan los datos completos de
-  oficinas y de sala de presentación por separado: precios (hora / día / mes) y
-  capacidad de cada espacio.
+Un bloque sigue vacío:
+
+- **Agenda de eventos del laboratorio** (sección 8) — no hay fuente. Existe un
+  Google Calendar público; falta definir si el bot lo lee (integración, fuera de
+  alcance por ahora) o si se carga a mano, y quién avisa cuando hay un evento
+  nuevo. La otra mitad de la sección 8 —organizar un evento en ENE— quedó
+  resuelta: el bot informa espacios y deriva a coordinacionenepctnqn@gmail.com.
 
 Y hay huecos puntuales en el resto:
 
 | Tema | Qué falta confirmar |
 |---|---|
 | Identidad | Cómo debe nombrarse el bot al presentarse ("ENE", "Polo Tecnológico Neuquén", otra forma) |
-| Institucional | Misión o descripción de ENE como polo (hoy sólo está la del laboratorio); si hay otras iniciativas además del IA LAB |
-| Horarios | Que el horario 9–17 sea de lunes a viernes (está asumido, no confirmado) |
+| Institucional | Misión o descripción de ENE como polo (hoy sólo está la del laboratorio); si hay otras iniciativas además del IA LAB; si la estructura societaria es información pública o la explica una persona |
 | Acceso | Si piden DNI en recepción |
 | Membresías | Si se puede dar de baja en cualquier momento o el compromiso es por el ciclo completo; si las 3 personas de la Corporativa son fijas o rotan; si al ingresar a mitad de ciclo se paga desde el mes que entra o hay ajuste |
 | Pagos | Datos bancarios / CBU o alias (ver la nota de abajo) |
+| Precios en pesos | **Quién actualiza** los `$85.000` / `$150.000` de las membresías. Se decidió que el bot los diga a secas, sin aclarar vigencia —es la respuesta más útil y la más natural para WhatsApp—, y el costo aceptado es que el día del aumento el bot siga dando el viejo con total seguridad hasta que alguien edite el KB. No puede detectarlo solo: no tiene reloj. Falta la persona a cargo. Los precios en dólares no tienen este problema (se facturan al dólar BNA del día). |
 | Postulación | Plazo aproximado de respuesta tras enviar el formulario |
-| Cowork | Precios de seats y oficinas (no publicados); si se reserva con anticipación; si las 2 veces por semana son días fijos o los elige el miembro; si el miembro de IA LAB accede a todos los servicios del cowork o sólo a escritorio y wifi |
+| Espacios | Valor del **seat por día** (figura como CONSULTAR); si la **sala de podcast** tiene tratamiento acústico o algo que la diferencie de la de reuniones —es la pregunta natural de quien compara USD 140 por 6 personas contra USD 100 por 16—; equipamiento real de la **oficina privada por día** (el documento fuente parece tener un copy-paste); costo del **domicilio postal** |
+| Cowork | Si el horario es 8–18 como el resto del edificio (el KB lo unificó por decisión; el 9–17 anterior venía de la web y nadie lo confirmó para el cowork); si se reserva con anticipación; si las 2 veces por semana son días fijos o los elige el miembro; si el miembro de IA LAB accede a todos los servicios del cowork o sólo a escritorio y wifi |
 | Actividades | Cuáles son las actividades abiertas al público y cómo enterarse |
-| Work Café | Horarios y si es de acceso público o sólo para usuarios del cowork |
+| Cafetería | Teléfono de contacto (el bot escala hasta tenerlo); si **The Coffee Store** y **Work Café** son el mismo lugar o dos cosas distintas —el KB usa los dos nombres— |
+| Mails | `info@eneneuquen.com.ar` quedó **obsoleto** pero sigue publicado en la web de ENE. El bot ya no lo da (usa `recepcion.ene.pctnqn@gmail.com`), pero la gente lo va a seguir usando y esos mensajes no los lee nadie. Conviene que ENE lo baje de la web o lo redirija. |
+| Referentes | Si el bot puede entregar el mail del referente de una vertical. **Requiere decisión de ENE, no un dato**: el bot no puede verificar que alguien sea miembro, así que entregar mails de personas nombradas a terceros no verificados choca con la regla 4 y con la Ley 25.326. Las tres opciones planteadas están en la sección 14 del KB. Hasta que se resuelva, no se dan contactos de referentes. |
 | Proyectos a pedido | Si se toman o no (el trabajo se organiza por verticales); hoy el bot escala esta consulta |
 
 **Regla del proyecto que no cambia:** el bot **nunca** envía datos bancarios,

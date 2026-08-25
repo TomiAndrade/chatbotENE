@@ -136,9 +136,11 @@ def test_aviso_en_horario_usa_la_hora_del_polo_no_la_del_server(client, kapso_en
 
 
 def test_aviso_fuera_de_horario_usa_la_hora_del_polo_no_la_del_server(client, kapso_enviados, monkeypatch):
-    # Martes 11:00 UTC = martes 08:00 en Buenos Aires → todavía no abrió.
-    # Leído como UTC serían las 11, que sí está dentro del horario.
-    instante = datetime(2026, 7, 28, 11, 0, tzinfo=timezone.utc)
+    # Martes 10:00 UTC = martes 07:00 en Buenos Aires → todavía no abrió.
+    # Leído como UTC serían las 10, que sí está dentro del horario.
+    # (Era 11:00 UTC = 08:00 BA cuando el horario era 9-17; con 8-18 las 8 ya
+    # es hora de apertura y el instante dejó de probar lo que dice probar.)
+    instante = datetime(2026, 7, 28, 10, 0, tzinfo=timezone.utc)
 
     aviso = _escalar_con_reloj(client, kapso_enviados, monkeypatch, instante, "wamid.horario-fuera")
 

@@ -211,16 +211,20 @@ Los tests **no deben pegarle a la API real**. Mockear el proveedor.
 
 ## Criterio de aceptación
 
-1. Se escribe "hola" y el bot se presenta como asistente de ENE.
+> **Revisados en agosto de 2026**, tras la ronda de datos de ENE que llenó la sección 11 del knowledge base. Los criterios 3 y 7 estaban escritos para un bot que no tenía precios de espacios y hoy los tiene: el 3 pedía escalar ante cualquier consulta de alquiler, y el 7 daba por buena la respuesta si el bot **no** decía el precio de una oficina —cosa que ahora sabe—. Tal como estaban, los dos se aprobaban con el comportamiento equivocado.
+
+1. Se escribe "hola" y el bot se presenta como asistente de ENE. **No** como asistente del IA LAB.
 2. Se pregunta el precio de la membresía individual y responde $85.000, corto y sin markdown.
-3. Se pregunta por alquiler de una sala y **escala**: `modo_humano` queda en `true`, con resumen guardado, y llega el aviso correspondiente al horario.
+3. Alquiler de espacios, que ahora son dos comportamientos distintos:
+   1. Se pregunta cuánto sale la sala de reuniones y **responde** USD 100 la jornada completa, hasta 16 personas, + IVA. **No escala.**
+   2. Se pide reservarla para una fecha concreta y ahí sí **escala**: `modo_humano` queda en `true`, con resumen guardado, y llega el aviso correspondiente al horario.
 4. A partir de ahí el bot **no responde más** en esa conversación.
 5. Se pregunta una receta de cocina y redirige sin escalar.
-6. Se pregunta algo relacionado pero ausente del knowledge base (por ejemplo, si hay bicicletero) y **escala** en vez de rechazar.
-7. Se pregunta el precio de una oficina y **no inventa** un número.
+6. Se pregunta algo relacionado pero ausente del knowledge base y **escala** en vez de rechazar. Elegir el ejemplo contra el KB del día: creció bastante y varios de los huecos viejos ya no lo son. Sirve preguntar si hay bicicletero, o si la sala de podcast tiene tratamiento acústico.
+7. Se pregunta cuánto sale un seat **por día** —el único valor de la sección 11 que figura como CONSULTAR— y **no inventa** un número: ni lo estima ni lo deduce del seat mensual ni de la oficina por día, que sí tienen precio al lado en la misma tabla.
 8. Los tests pasan.
 
-El punto 6 es el que más suele fallar. Si el bot lo rechaza como fuera de tema, el problema está en el prompt, no en el código.
+El punto 6 es el que más suele fallar. Si el bot lo rechaza como fuera de tema, el problema está en el prompt, no en el código. El 7 es el nuevo candidato a fallar: tener precios cerca del hueco invita a interpolar mucho más que no tener ninguno.
 
 ---
 
