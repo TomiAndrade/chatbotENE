@@ -17,7 +17,7 @@ from tests.conftest import TELEFONO_DE_PRUEBA
 CANTIDAD_HILOS = 8
 
 
-def test_entregas_concurrentes_del_mismo_mensaje_no_duplican(kapso_enviados):
+def test_entregas_concurrentes_del_mismo_mensaje_no_duplican(meta_enviados):
     db = SessionLocal()
     buscar_o_crear_conversacion(db, "whatsapp", TELEFONO_DE_PRUEBA)
     db.close()
@@ -40,4 +40,4 @@ def test_entregas_concurrentes_del_mismo_mensaje_no_duplican(kapso_enviados):
 
     assert len(guardados) == 1
     # Solo la entrega que ganó la carrera llegó a responder.
-    assert len(kapso_enviados) == 1
+    assert len(meta_enviados) == 1
