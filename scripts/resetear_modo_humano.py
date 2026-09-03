@@ -30,6 +30,8 @@ def resetear_modo_humano(identificador_externo: str, canal: str = CANAL_WHATSAPP
             return False
 
         conversacion.modo_humano = False
+        conversacion.motivo_pausa = None
+        conversacion.modo_humano_desde = None
         conversacion.resumen_escalamiento = None
         conversacion.escalada_en = None
         db.commit()

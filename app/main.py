@@ -24,11 +24,24 @@ SQLAlchemy y httpx no frenan el event loop. La contracara es que dos mensajes
 seguidos del mismo número se procesan en paralelo: el chequeo de modo_humano
 del paso 6 puede quedar viejo mientras el modelo piensa, así que se vuelve a
 leer de la base justo antes de enviar (ver `esta_en_modo_humano`).
+
+El webhook también atiende `whatsapp.message.sent` (ver
+spec-pausa-por-intervencion-humana.md): el número está en modo coexistencia,
+la secretaría responde desde la app de WhatsApp Business sobre el mismo
+número que usa el bot, y hay que enterarse cuando eso pasa para no escribir
+encima. `procesar_mensaje_saliente` filtra ese evento a los mensajes
+`direction=outbound, origin=business_app` — la combinación que solo puede
+mandar una persona desde la app, nunca el bot por API — y prende o reinicia
+la pausa por intervención manual. `motivo_pausa` (`MotivoPausa` en
+app/models.py) distingue esa pausa de un escalamiento del modelo: solo la
+manual expira, pasados `PAUSA_HUMANA_MINUTOS` desde `modo_humano_desde`; un
+escalamiento (`escalar_a_humano`) usa el mismo `modo_humano` pero no expira
+nunca, se desmarca a mano.
 """
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 from sqlalchemy.exc import IntegrityError
@@ -39,7 +52,7 @@ from app.db import SessionLocal, init_db
 from app.historial import construir_historial
 from app.kapso import KapsoClient, verificar_firma_webhook
 from app.limite import mensajes_ultima_hora
-from app.models import CANAL_WHATSAPP, Conversacion, Mensaje, RolMensaje
+from app.models import CANAL_WHATSAPP, Conversacion, Mensaje, MotivoPausa, RolMensaje
 from app.respuesta import ErrorTransitorioProveedor, generar_respuesta
 
 logging.basicConfig(
@@ -52,6 +65,7 @@ app = FastAPI(title="Bot WhatsApp ENE IA LAB")
 kapso_client = KapsoClient()
 
 EVENTO_MENSAJE_RECIBIDO = "whatsapp.message.received"
+EVENTO_MENSAJE_ENVIADO = "whatsapp.message.sent"
 
 
 @app.on_event("startup")
@@ -98,9 +112,56 @@ def buscar_o_crear_conversacion(db, canal: str, identificador_externo: str) -> C
         return db.query(Conversacion).filter_by(canal=canal, identificador_externo=identificador_externo).one()
 
 
+def _pausa_vigente(conversacion: Conversacion, ahora: datetime) -> bool:
+    """Si `conversacion` está en modo_humano *ahora mismo*, contemplando que
+    la pausa por intervención manual expira.
+
+    Quién decide si expira es `motivo_pausa`, no si `modo_humano_desde` tiene
+    valor: solo INTERVENCION_MANUAL expira, a los `PAUSA_HUMANA_MINUTOS` de
+    la última vez que la secretaría respondió (se reinicia con cada mensaje
+    nuevo, ver `registrar_intervencion_humana`). ESCALAMIENTO no expira
+    nunca, se desmarca a mano. Un `motivo_pausa` en None con `modo_humano`
+    prendido no debería pasar (dato viejo, o alguien puso `modo_humano = 1`
+    a mano por SQL sin especificar el motivo) — se trata como si no
+    expirara: errar hacia "sigue pausado" es más seguro que arriesgarse a
+    que el bot le escriba encima a alguien.
+
+    SQLite devuelve los DateTime(timezone=True) sin tzinfo aunque se hayan
+    guardado en UTC (se probó a mano: el round-trip pierde el offset). Todo lo
+    que este proyecto guarda en esas columnas es `datetime.now(timezone.utc)`
+    o equivalente, así que un valor naive acá se interpreta como UTC.
+    """
+    if not conversacion.modo_humano:
+        return False
+    if conversacion.motivo_pausa != MotivoPausa.INTERVENCION_MANUAL:
+        return True
+
+    desde = conversacion.modo_humano_desde
+    if desde is None:
+        return True
+    if desde.tzinfo is None:
+        desde = desde.replace(tzinfo=timezone.utc)
+    return ahora - desde <= timedelta(minutes=config.pausa_humana_minutos)
+
+
+def _ya_escalada(conversacion: Conversacion) -> bool:
+    """True si la conversación ya está escalada por el modelo.
+
+    Distinto de `esta_en_modo_humano`/`_pausa_vigente`: es el chequeo propio
+    de `escalar_a_humano` para no pisar un escalamiento con otro. Una pausa
+    manual vigente (la secretaría ya está respondiendo) NO cuenta acá — si
+    contara, un escalamiento del modelo que cae justo en esa ventana se
+    perdería entero (sin resumen, sin escalada_en, sin aviso) y la
+    conversación volvería al bot cuando la pausa manual expire, sin que nadie
+    se haya enterado de que hacía falta un humano. Eso pasaba antes de que
+    existiera `motivo_pausa`."""
+    return conversacion.modo_humano and conversacion.motivo_pausa == MotivoPausa.ESCALAMIENTO
+
+
 def esta_en_modo_humano(db, conversacion: Conversacion) -> bool:
     """Re-lee modo_humano de la base, sin confiar en lo que tenga cargado la
-    sesión.
+    sesión, y aplica la expiración por tiempo de la pausa manual (ver
+    `_pausa_vigente`).
 
     Hace falta porque entre el chequeo de modo_humano de
     `procesar_mensaje_entrante` y el momento de enviar puede pasar bastante
@@ -111,7 +172,7 @@ def esta_en_modo_humano(db, conversacion: Conversacion) -> bool:
     que el criterio de aceptación 4 del spec-etapa2.md prohíbe.
     """
     db.refresh(conversacion)
-    return conversacion.modo_humano
+    return _pausa_vigente(conversacion, datetime.now(timezone.utc))
 
 
 def enviar_y_guardar(
@@ -170,18 +231,27 @@ def escalar_a_humano(db, conversacion: Conversacion, resumen: str | None) -> Non
 
     Si mientras se generaba la respuesta otra entrega ya escaló, no se vuelve
     a escalar: pisar el resumen del primer escalamiento con el del segundo le
-    saca contexto a quien vaya a atender.
+    saca contexto a quien vaya a atender. El chequeo (`_ya_escalada`) es
+    sobre un escalamiento previo puntualmente, no sobre modo_humano en
+    general: una pausa manual vigente (la secretaría ya está respondiendo)
+    no tiene que frenar esto. Si lo frenara, el escalamiento se perdería
+    entero — sin resumen, sin escalada_en, sin aviso — y la conversación
+    volvería sola al bot cuando la pausa manual expire.
     """
-    if esta_en_modo_humano(db, conversacion):
+    db.refresh(conversacion)
+    if _ya_escalada(conversacion):
         logger.info(
             "La conversación con %s ya estaba escalada, no se escala de nuevo",
             enmascarar_identificador(conversacion.identificador_externo),
         )
         return
 
+    ahora = datetime.now(timezone.utc)
     conversacion.modo_humano = True
+    conversacion.motivo_pausa = MotivoPausa.ESCALAMIENTO
+    conversacion.modo_humano_desde = ahora
     conversacion.resumen_escalamiento = resumen
-    conversacion.escalada_en = datetime.now(timezone.utc)
+    conversacion.escalada_en = ahora
     db.commit()
 
     # Va acá, pegado al commit, y no al final: si el envío del aviso falla, el
@@ -304,12 +374,13 @@ def procesar_mensaje_entrante(identificador_externo: str, wa_message_id: str, co
             )
             return
 
+        pausado = _pausa_vigente(conversacion, datetime.now(timezone.utc))
         logger.info(
-            "Mensaje de %s guardado (modo_humano=%s): %s",
-            enmascarar_identificador(identificador_externo), conversacion.modo_humano, contenido,
+            "Mensaje de %s guardado (pausado=%s): %s",
+            enmascarar_identificador(identificador_externo), pausado, contenido,
         )
 
-        if conversacion.modo_humano:
+        if pausado:
             return
 
         conteo_ultima_hora = mensajes_ultima_hora(db, CANAL_WHATSAPP, identificador_externo)
@@ -329,6 +400,92 @@ def procesar_mensaje_entrante(identificador_externo: str, wa_message_id: str, co
         db.close()
 
 
+def registrar_intervencion_humana(db, conversacion: Conversacion, contenido: str, wa_message_id: str) -> None:
+    """Guarda el mensaje de la secretaría (rol HUMANO, sin commit) y prende o
+    reinicia la ventana de pausa por intervención manual.
+
+    No commitea: lo hace quien llama (`procesar_mensaje_saliente`), para
+    poder atrapar un IntegrityError de `wa_message_id` duplicado sin dejar a
+    mitad de camino el cambio de modo_humano — un reintento del mismo evento
+    no tiene que reiniciar la ventana (spec-pausa-por-intervencion-humana.md,
+    sección 6).
+
+    Si la conversación ya estaba escalada por el modelo (`_ya_escalada`), no
+    se le cambia el motivo ni la fecha: el escalamiento no expira, y que la
+    secretaría responda sobre esa conversación no cambia eso (sección 8 del
+    spec). En cualquier otro caso -sin pausa previa, o con una pausa manual
+    ya en curso, vencida o no- se prende o reinicia la ventana.
+    """
+    db.add(
+        Mensaje(
+            conversacion_id=conversacion.id,
+            rol=RolMensaje.HUMANO,
+            contenido=contenido,
+            wa_message_id=wa_message_id,
+        )
+    )
+
+    ahora = datetime.now(timezone.utc)
+    if not _ya_escalada(conversacion):
+        conversacion.modo_humano = True
+        conversacion.motivo_pausa = MotivoPausa.INTERVENCION_MANUAL
+        conversacion.modo_humano_desde = ahora
+    conversacion.ultimo_mensaje_en = ahora
+
+
+def procesar_mensaje_saliente(identificador_externo: str, wa_message_id: str, contenido: str) -> None:
+    """Procesa un evento `whatsapp.message.sent` ya filtrado en
+    `recibir_webhook` como `direction=outbound, origin=business_app` — la
+    combinación que solo puede mandar una persona respondiendo desde la app
+    de WhatsApp Business, nunca el bot (ver spec-pausa-por-intervencion-
+    humana.md, sección 3). Corre en background, igual que
+    `procesar_mensaje_entrante`.
+    """
+    db = SessionLocal()
+    try:
+        ya_existe = db.query(Mensaje).filter_by(wa_message_id=wa_message_id).first()
+        if ya_existe is not None:
+            logger.info(
+                "Mensaje saliente de la secretaría a %s duplicado (wa_message_id=%s), se descarta sin tocar la pausa",
+                enmascarar_identificador(identificador_externo), wa_message_id,
+            )
+            return
+
+        conversacion = buscar_o_crear_conversacion(db, CANAL_WHATSAPP, identificador_externo)
+        registrar_intervencion_humana(db, conversacion, contenido, wa_message_id)
+        try:
+            db.commit()
+        except IntegrityError:
+            # Mismo caso que en procesar_mensaje_entrante: dos entregas del
+            # mismo evento llegaron a la vez y las dos pasaron el chequeo de
+            # duplicado de arriba.
+            db.rollback()
+            logger.info(
+                "Mensaje saliente de la secretaría a %s duplicado (wa_message_id=%s) detectado al guardar, "
+                "se descarta sin tocar la pausa",
+                enmascarar_identificador(identificador_externo), wa_message_id,
+            )
+            return
+
+        logger.warning(
+            "PAUSA POR INTERVENCIÓN MANUAL — %s (modo_humano_desde=%s)",
+            enmascarar_identificador(identificador_externo), conversacion.modo_humano_desde,
+        )
+    finally:
+        db.close()
+
+
+def _extraer_contenido(mensaje: dict) -> str:
+    """Traduce `message.type`/`message.text.body` del payload de Kapso al
+    texto a guardar. Comparte esta lógica el mensaje entrante y el saliente
+    de la secretaría: los dos pueden venir con tipos no soportados (una
+    imagen, un audio)."""
+    tipo = mensaje.get("type")
+    if tipo == "text":
+        return mensaje.get("text", {}).get("body", "")
+    return f"[mensaje de tipo '{tipo}' no soportado en esta etapa]"
+
+
 @app.post("/webhook")
 async def recibir_webhook(
     request: Request,
@@ -344,28 +501,54 @@ async def recibir_webhook(
         logger.warning("Firma de webhook inválida, se descarta la request")
         raise HTTPException(status_code=401, detail="Firma inválida")
 
-    if x_webhook_event != EVENTO_MENSAJE_RECIBIDO:
-        logger.debug("Evento de webhook ignorado: %s", x_webhook_event)
-        return {"status": "evento ignorado"}
+    if x_webhook_event == EVENTO_MENSAJE_RECIBIDO:
+        payload = json.loads(cuerpo_crudo)
+        mensaje = payload.get("message", {})
+        conversacion_payload = payload.get("conversation", {})
 
-    payload = json.loads(cuerpo_crudo)
-    mensaje = payload.get("message", {})
-    conversacion_payload = payload.get("conversation", {})
+        wa_message_id = mensaje.get("id")
+        identificador_externo = mensaje.get("from") or conversacion_payload.get("phone_number")
+        contenido = _extraer_contenido(mensaje)
 
-    wa_message_id = mensaje.get("id")
-    identificador_externo = mensaje.get("from") or conversacion_payload.get("phone_number")
-    tipo = mensaje.get("type")
-    if tipo == "text":
-        contenido = mensaje.get("text", {}).get("body", "")
-    else:
-        contenido = f"[mensaje de tipo '{tipo}' no soportado en esta etapa]"
+        if not identificador_externo or not wa_message_id:
+            logger.warning("Payload de webhook incompleto, se descarta: %s", payload)
+            return {"status": "payload incompleto"}
 
-    if not identificador_externo or not wa_message_id:
-        logger.warning("Payload de webhook incompleto, se descarta: %s", payload)
-        return {"status": "payload incompleto"}
+        background_tasks.add_task(procesar_mensaje_entrante, identificador_externo, wa_message_id, contenido)
+        return {"status": "ok"}
 
-    background_tasks.add_task(procesar_mensaje_entrante, identificador_externo, wa_message_id, contenido)
-    return {"status": "ok"}
+    if x_webhook_event == EVENTO_MENSAJE_ENVIADO:
+        payload = json.loads(cuerpo_crudo)
+        mensaje = payload.get("message", {})
+        conversacion_payload = payload.get("conversation", {})
+        kapso_info = mensaje.get("kapso") or {}
+
+        # Requisito crítico (spec-pausa-por-intervencion-humana.md, sección
+        # 3): chequeo explícito y positivo de los dos valores exactos, nunca
+        # "si no es del bot, es humano". Si el bot manda un mensaje y ese
+        # evento vuelve por acá como outbound+cloud_api, o si origin viene
+        # ausente o con cualquier valor que no sea justo "business_app", no
+        # se pausa — el bot no puede pausarse a sí mismo.
+        if kapso_info.get("direction") != "outbound" or kapso_info.get("origin") != "business_app":
+            logger.debug(
+                "Evento %s ignorado (direction=%s, origin=%s)",
+                x_webhook_event, kapso_info.get("direction"), kapso_info.get("origin"),
+            )
+            return {"status": "evento ignorado"}
+
+        wa_message_id = mensaje.get("id")
+        identificador_externo = mensaje.get("to") or conversacion_payload.get("phone_number")
+        contenido = _extraer_contenido(mensaje)
+
+        if not identificador_externo or not wa_message_id:
+            logger.warning("Payload de whatsapp.message.sent incompleto, se descarta: %s", payload)
+            return {"status": "payload incompleto"}
+
+        background_tasks.add_task(procesar_mensaje_saliente, identificador_externo, wa_message_id, contenido)
+        return {"status": "ok"}
+
+    logger.debug("Evento de webhook ignorado: %s", x_webhook_event)
+    return {"status": "evento ignorado"}
 
 
 @app.get("/health")

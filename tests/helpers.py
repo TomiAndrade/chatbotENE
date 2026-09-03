@@ -61,3 +61,40 @@ def payload_mensaje_texto(wa_message_id: str, telefono: str, texto: str) -> dict
         },
         "conversation": {"phone_number": telefono},
     }
+
+
+_SIN_VALOR = object()
+
+
+def payload_mensaje_saliente(
+    wa_message_id: str,
+    telefono: str,
+    texto: str,
+    direction: str | None = "outbound",
+    origin=_SIN_VALOR,
+) -> dict:
+    """Payload de `whatsapp.message.sent` (spec-pausa-por-intervencion-
+    humana.md, sección 2). `direction` y `origin` viven en `message.kapso`.
+
+    `origin` no tiene default propio: por defecto (`_SIN_VALOR`) la clave
+    `origin` ni se incluye, para poder simular el caso "campo ausente" del
+    spec sin un `None` explícito que no es lo mismo que faltar la clave.
+    Pasar `None` explícito para el caso "valor null"; cualquier otro string
+    simula un valor inesperado.
+    """
+    kapso: dict = {}
+    if direction is not None:
+        kapso["direction"] = direction
+    if origin is not _SIN_VALOR:
+        kapso["origin"] = origin
+
+    return {
+        "message": {
+            "id": wa_message_id,
+            "to": telefono,
+            "type": "text",
+            "text": {"body": texto},
+            "kapso": kapso,
+        },
+        "conversation": {"id": "conv_de_prueba", "phone_number": telefono},
+    }

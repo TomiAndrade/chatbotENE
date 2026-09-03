@@ -54,7 +54,10 @@ Copiar la URL `https://...ngrok...` que muestra ngrok. En el dashboard de
 Kapso, en el número sandbox, configurar el webhook destination con:
 
 - URL: `https://<tu-url-de-ngrok>/webhook`
-- Evento: `whatsapp.message.received`
+- Eventos: `whatsapp.message.received` y `whatsapp.message.sent` (este último
+  es el que permite detectar cuándo la secretaría responde desde la app de
+  WhatsApp Business y pausar al bot — ver
+  spec-pausa-por-intervencion-humana.md)
 
 Copiar el secreto que Kapso genera para ese webhook a `KAPSO_WEBHOOK_SECRET`
 en `.env` y reiniciar el servidor.
@@ -69,11 +72,18 @@ no anda.
    la consola del servidor.
 2. Confirmar que quedó guardado: `sqlite3 bot.db "select * from mensajes;"`.
 3. Debe llegar una respuesta fija al WhatsApp del celular.
-4. Marcar modo humano a mano para un número:
+4. Marcar modo humano a mano para un número. `motivo_pausa` se setea
+   explícito a `'escalamiento'` para que no dependa de quedar `NULL` por
+   default — con `NULL` la pausa igual no expira (`_pausa_vigente` en
+   `app/main.py` lo trata como si no expirara), pero dejarlo así en una
+   fila creada a mano es un dato indefinido, no una decisión:
    ```sql
-   sqlite3 bot.db "update conversaciones set modo_humano = 1 where telefono = '<numero>';"
+   sqlite3 bot.db "update conversaciones set modo_humano = 1, motivo_pausa = 'escalamiento' where identificador_externo = '<numero>';"
    ```
-   El bot deja de responder a ese número.
+   El bot deja de responder a ese número. Para desmarcarlo, usar
+   `scripts/resetear_modo_humano.py <numero>` en vez de otro UPDATE a mano —
+   limpia motivo_pausa, modo_humano_desde, resumen_escalamiento y
+   escalada_en juntos.
 5. Reenviar el mismo evento desde el panel de ngrok (Replay) no debe crear un
    mensaje duplicado — se descarta por `wa_message_id` repetido.
 

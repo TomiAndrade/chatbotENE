@@ -179,8 +179,8 @@ def test_el_request_lleva_la_herramienta_y_el_modelo_configurado():
     assert "resumen" in kwargs["tools"][0]["input_schema"]["properties"]
 
 
-def test_el_historial_se_mapea_a_roles_de_anthropic_con_el_prefijo_humano():
-    from app.historial import PREFIJO_HUMANO
+def test_el_historial_se_mapea_a_roles_de_anthropic_con_el_marcador_humano():
+    from app.historial import MARCADOR_HUMANO
 
     proveedor, cliente = _proveedor_con_cliente_falso(_respuesta([_bloque_texto("ok")]))
     historial = [
@@ -194,7 +194,7 @@ def test_el_historial_se_mapea_a_roles_de_anthropic_con_el_prefijo_humano():
     assert cliente.llamadas[0]["messages"] == [
         {"role": "user", "content": "hola"},
         {"role": "assistant", "content": "¡hola! ¿en qué te ayudo?"},
-        {"role": "assistant", "content": PREFIJO_HUMANO + "te confirmo la sala mañana"},
+        {"role": "assistant", "content": MARCADOR_HUMANO},
         {"role": "user", "content": "¿alguna novedad?"},
     ]
 

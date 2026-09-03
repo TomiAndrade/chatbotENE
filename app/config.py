@@ -25,6 +25,7 @@ class Config:
     historial_max_mensajes: int
     historial_dias_validez: int
     limite_mensajes_hora: int
+    pausa_humana_minutos: int
 
 
 def _cargar_config() -> Config:
@@ -43,6 +44,11 @@ def _cargar_config() -> Config:
         historial_max_mensajes=int(os.getenv("HISTORIAL_MAX_MENSAJES", "20")),
         historial_dias_validez=int(os.getenv("HISTORIAL_DIAS_VALIDEZ", "7")),
         limite_mensajes_hora=int(os.getenv("LIMITE_MENSAJES_HORA", "30")),
+        # 120, no los 30 que sugiere Kapso: con 30 el bot puede despertarse y
+        # escribir encima de una conversación humana en curso (ver
+        # spec-pausa-por-intervencion-humana.md, sección 5). A validar con
+        # uso real.
+        pausa_humana_minutos=int(os.getenv("PAUSA_HUMANA_MINUTOS", "120")),
     )
 
 

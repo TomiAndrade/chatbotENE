@@ -414,6 +414,12 @@ que redescubrirlas.
   reproduce porque serializa las escrituras; **con Postgres en producción el
   escenario se abre**. La forma robusta sería un `>=` con un flag persistido de
   "ya avisé en esta ventana".
+- **No hay tests de la constraint compuesta `(canal, identificador_externo)`
+  de `Conversacion`.** Nada verifica que el mismo `identificador_externo` en
+  dos canales distintos cree dos conversaciones separadas, ni que el mismo par
+  `(canal, identificador_externo)` siga siendo único. Hoy no hay nada que
+  romper porque solo existe el canal `whatsapp`, pero es lo primero a cubrir
+  cuando se sume el canal web.
 
 ---
 
@@ -431,3 +437,24 @@ redescubran como si fueran olvidos.
 - Notificar al equipo cuando se escala. Hoy el escalamiento queda como un
   `WARNING` en el log y como `resumen_escalamiento` + `escalada_en` en la tabla
   `conversaciones`; nadie recibe un aviso activo.
+
+---
+
+## 10. El historial no le pasa al modelo el contenido de los mensajes humanos
+
+Los mensajes que la secretaría manda desde la app (rol `humano`) se guardan
+completos en la base, pero `app/historial.py:mapear_mensaje` reemplaza el
+contenido por `MARCADOR_HUMANO` al armar el historial que va al modelo (ver
+spec-pausa-por-intervencion-humana.md).
+
+**Por qué:** el knowledge base documenta que los datos bancarios los manda el
+equipo por ese mismo canal — la secretaría, desde la app. Si el contenido
+pasara íntegro al historial, el CBU entraría al contexto del modelo, y la
+regla "nunca datos bancarios" (que no cambia en ninguna etapa) pasaría de ser
+una garantía dura — el dato no existe en el contexto — a depender de que el
+modelo obedezca el prompt. Este modelo a veces no obedece: ver en la sección 2
+el caso de la derivación prometida sin llamar a la herramienta.
+
+**No sacar el filtro sin resolver antes qué pasa con el CBU.** Parece pérdida
+de contexto innecesaria (el bot "no recuerda" lo que dijo la secretaría) y no
+lo es.
