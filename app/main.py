@@ -199,7 +199,7 @@ def enviar_y_guardar(
     `aunque_este_en_modo_humano=True`.
 
     Devuelve True si el mensaje salió; False si se descartó por modo_humano o
-    si Kapso lo rechazó.
+    si Meta lo rechazó.
     """
     identificador_externo = conversacion.identificador_externo
 
