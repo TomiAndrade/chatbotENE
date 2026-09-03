@@ -26,6 +26,7 @@ class Config:
     historial_dias_validez: int
     limite_mensajes_hora: int
     pausa_humana_minutos: int
+    escalamiento_habilitado: bool
 
 
 def _cargar_config() -> Config:
@@ -49,6 +50,11 @@ def _cargar_config() -> Config:
         # spec-pausa-por-intervencion-humana.md, sección 5). A validar con
         # uso real.
         pausa_humana_minutos=int(os.getenv("PAUSA_HUMANA_MINUTOS", "120")),
+        # Sin bandeja de entrada no hay quién reciba un escalamiento (ver
+        # specs/spec-derivacion.md): apagado hasta que exista una. La
+        # herramienta y modo_humano siguen implementados, solo dejan de
+        # ofrecerse al modelo.
+        escalamiento_habilitado=os.getenv("ESCALAMIENTO_HABILITADO", "false").lower() == "true",
     )
 
 

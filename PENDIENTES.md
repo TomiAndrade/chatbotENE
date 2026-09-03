@@ -420,6 +420,29 @@ que redescubrirlas.
   `(canal, identificador_externo)` siga siendo único. Hoy no hay nada que
   romper porque solo existe el canal `whatsapp`, pero es lo primero a cubrir
   cuando se sume el canal web.
+- **Con `ESCALAMIENTO_HABILITADO=false`, si el modelo igual llama a
+  `escalar_a_humano` (no debería, al no estar declarada, pero no hay garantía
+  de que no pase), `_interpretar_respuesta` descarta el tool call con
+  `continue` y logueá un warning. Ya se revisó qué le vuelve a `main.py` en
+  cada caso:**
+  - **Sin texto además del tool call:** `resultado.texto` queda `None` y
+    `resultado.escalar` en `False`, entra en la rama "el modelo devolvió una
+    respuesta vacía sin escalar" de `main.py` (línea ~321) — manda
+    `MENSAJE_ERROR_GENERICO` y corre el fallback `escalar_a_humano` interno.
+    No hay silencio; ya está cubierto y probado indirectamente (no hace falta
+    tocar nada acá).
+  - **Con texto además del tool call** (p. ej. el modelo escribe "dale, te
+    paso con alguien" y en el mismo turno llama a la herramienta): ese texto
+    **sí** se envía (`resultado.texto` no está vacío), pero como el tool call
+    se descartó, `resultado.escalar` es `False` y no se llama a
+    `escalar_a_humano`. El bot le promete al usuario un pase a una persona que
+    nunca llega — mismo patrón que ya describe la sección 10 con la
+    "derivación prometida sin llamar a la herramienta", pero ahora también
+    puede pasar con el escalamiento. No se arregla filtrando el texto (sería
+    peor: el modelo cortó ahí, no hay otra respuesta que mandar); requiere
+    pensar el prompt o un chequeo explícito de "prometió pasar con alguien" —
+    no trivial. Ver `_interpretar_respuesta` en `proveedor_claude.py` y
+    `proveedor_openai_compat.py`.
 
 ---
 

@@ -16,6 +16,10 @@ def _config_de_test(monkeypatch):
     monkeypatch.setattr(config, "base_url", "https://api.example.test/v1")
     monkeypatch.setattr(config, "openai_compat_api_key", "test-key")
     monkeypatch.setattr(config, "modelo", "modelo-de-test")
+    # Este archivo prueba el parseo de tool_calls asumiendo la herramienta
+    # declarada; ESCALAMIENTO_HABILITADO=false es el default de producción
+    # (ver app/config.py), no lo que este archivo cubre.
+    monkeypatch.setattr(config, "escalamiento_habilitado", True)
 
 
 def _proveedor_con_transporte(handler) -> ProveedorOpenAICompat:

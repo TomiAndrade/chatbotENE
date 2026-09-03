@@ -29,6 +29,7 @@ os.environ["HISTORIAL_MAX_MENSAJES"] = "20"
 os.environ["HISTORIAL_DIAS_VALIDEZ"] = "7"
 os.environ["LIMITE_MENSAJES_HORA"] = "30"
 os.environ["PAUSA_HUMANA_MINUTOS"] = "120"
+os.environ["ESCALAMIENTO_HABILITADO"] = "false"
 
 import pytest
 from fastapi.testclient import TestClient

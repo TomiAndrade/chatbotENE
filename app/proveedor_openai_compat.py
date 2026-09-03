@@ -46,16 +46,21 @@ from app.respuesta import (
 
 logger = logging.getLogger("proveedor_openai_compat")
 
-_HERRAMIENTAS = [
-    {
-        "type": "function",
-        "function": {
-            "name": NOMBRE_HERRAMIENTA_ESCALAR,
-            "description": DESCRIPCION_HERRAMIENTA_ESCALAR,
-            "parameters": PARAMETROS_HERRAMIENTA_ESCALAR,
-        },
-    }
-]
+def _herramientas() -> list[dict]:
+    """Vacía si ESCALAMIENTO_HABILITADO=false (ver specs/spec-derivacion.md):
+    sin bandeja de entrada, no hay quién reciba un escalamiento."""
+    if not config.escalamiento_habilitado:
+        return []
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": NOMBRE_HERRAMIENTA_ESCALAR,
+                "description": DESCRIPCION_HERRAMIENTA_ESCALAR,
+                "parameters": PARAMETROS_HERRAMIENTA_ESCALAR,
+            },
+        }
+    ]
 
 
 class ProveedorOpenAICompat(ProveedorRespuesta):
@@ -81,7 +86,7 @@ class ProveedorOpenAICompat(ProveedorRespuesta):
             json={
                 "model": config.modelo,
                 "messages": mensajes,
-                "tools": _HERRAMIENTAS,
+                "tools": _herramientas(),
             },
         )
 
@@ -129,6 +134,11 @@ def _interpretar_respuesta(cuerpo: dict) -> RespuestaGenerada:
     for llamada in mensaje.get("tool_calls") or []:
         funcion = llamada.get("function") or {}
         if funcion.get("name") != NOMBRE_HERRAMIENTA_ESCALAR:
+            continue
+        if not config.escalamiento_habilitado:
+            logger.warning(
+                "El modelo llamó a escalar_a_humano con ESCALAMIENTO_HABILITADO=false; se ignora."
+            )
             continue
         escalar = True
         try:
