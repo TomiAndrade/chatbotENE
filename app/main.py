@@ -49,6 +49,7 @@ tests siguen ahí por si más adelante Meta habilita Coexistence.
 
 import json
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Query, Request
@@ -64,10 +65,38 @@ from app.meta import MetaClient, verificar_challenge, verificar_firma_webhook
 from app.models import CANAL_WHATSAPP, Conversacion, Mensaje, MotivoPausa, RolMensaje
 from app.respuesta import ErrorTransitorioProveedor, generar_respuesta
 
-logging.basicConfig(
-    level=logging.DEBUG if config.debug else logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+class _FormatterUTC(logging.Formatter):
+    """`%(asctime)s` en UTC, no en la hora local del servidor.
+
+    `logging.Formatter.converter` (el `time.struct_time` que arma `asctime`)
+    apunta a `time.localtime` por default. En Render eso puede ser cualquier
+    zona; las fechas que este proyecto guarda en la base son todas aware en
+    UTC (ver DateTime(timezone=True) en app/models.py), así que si el log no
+    coincide en zona, cruzar un timestamp del log con una fila de la base
+    obliga a hacer la conversión a mano. Se pisa acá, en la clase, y no con
+    `logging.Formatter.converter = time.gmtime` a nivel de módulo: eso
+    afectaría a cualquier otro Formatter del proceso (incluido el de
+    uvicorn, si en el futuro empieza a usar asctime), y este cambio tiene
+    que quedar contenido al logger de la app.
+    """
+
+    converter = staticmethod(time.gmtime)
+
+
+_handler = logging.StreamHandler()
+_handler.setFormatter(
+    _FormatterUTC(
+        fmt="%(asctime)sZ [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    )
 )
+# `handlers=[...]` en vez de `format=`/`datefmt=`: así basicConfig usa este
+# handler tal cual, sin construir uno propio que pisaría el formatter UTC de
+# arriba. Solo toca el logger raíz — "uvicorn", "uvicorn.access" y
+# "uvicorn.error" tienen sus propios handlers con propagate=False (ver
+# uvicorn.config.LOGGING_CONFIG) y nunca llegan a este, así que no hay
+# duplicado ni conflicto con lo que uvicorn imprime.
+logging.basicConfig(level=logging.DEBUG if config.debug else logging.INFO, handlers=[_handler])
 logger = logging.getLogger("bot")
 
 app = FastAPI(title="Bot WhatsApp ENE IA LAB")
@@ -416,10 +445,11 @@ def procesar_mensaje_entrante(identificador_externo: str, wa_message_id: str, co
             return
 
         responder(db, conversacion, mensaje_usuario)
-    except Exception:
+    except Exception as error:
         logger.error(
-            "Error inesperado procesando el mensaje de %s (wa_message_id=%s)",
-            enmascarar_identificador(identificador_externo), wa_message_id, exc_info=True,
+            "Error inesperado procesando el mensaje de %s (wa_message_id=%s): %s: %s",
+            enmascarar_identificador(identificador_externo), wa_message_id, type(error).__name__, error,
+            exc_info=True,
         )
     finally:
         db.close()
