@@ -132,10 +132,13 @@ def _pausa_vigente(conversacion: Conversacion, ahora: datetime) -> bool:
     expirara: errar hacia "sigue pausado" es más seguro que arriesgarse a
     que el bot le escriba encima a alguien.
 
-    SQLite devuelve los DateTime(timezone=True) sin tzinfo aunque se hayan
-    guardado en UTC (se probó a mano: el round-trip pierde el offset). Todo lo
-    que este proyecto guarda en esas columnas es `datetime.now(timezone.utc)`
-    o equivalente, así que un valor naive acá se interpreta como UTC.
+    El guard de `tzinfo is None` de acá abajo es para SQLite: devuelve los
+    DateTime(timezone=True) sin tzinfo aunque se hayan guardado en UTC (se
+    probó a mano: el round-trip pierde el offset). Todo lo que este proyecto
+    guarda en esas columnas es `datetime.now(timezone.utc)` o equivalente,
+    así que un valor naive acá se interpreta como UTC. Contra Postgres las
+    fechas ya vuelven aware (`timestamptz`) y el guard no se dispara — sigue
+    ahí porque el mismo código corre contra los dos motores.
     """
     if not conversacion.modo_humano:
         return False

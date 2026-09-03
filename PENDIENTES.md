@@ -339,7 +339,76 @@ Cuando se vaya a deployar (fuera de alcance por ahora, ver punto 9):
 - `PROVEEDOR_IA=claude` con `ANTHROPIC_API_KEY`.
 - `MODELO` apuntando a un modelo chico y rápido (Haiku), **no** al más grande:
   las respuestas son cortas y el volumen es de WhatsApp.
-- `DATABASE_URL` a Postgres. Migrar es cambiar esa variable y nada más.
+- `DATABASE_URL` a Postgres. Migrar es cambiar esa variable y nada más: en
+  Render se enlaza desde la base administrada, y `normalizar_url`
+  (`app/db.py`) se ocupa del prefijo `postgres://` que entrega Render. Ver la
+  sección 5.b por lo que **no** cubre ese cambio.
+
+---
+
+## 5.b. Postgres sin migraciones — prioritario post-lanzamiento
+
+El esquema lo crea `init_db()` con `create_all`, y para el primer deploy
+alcanza: la base arranca vacía y no hay datos que migrar. **Alembic quedó
+deliberadamente fuera de la migración a Postgres** (spec-postgres.md, sección
+5) para no agrandar el alcance con la fecha encima. No es un olvido, pero sí
+un pendiente con fecha de vencimiento.
+
+Dos cosas que hay que tener presentes hasta que exista Alembic:
+
+- **`create_all` crea lo que falta, no modifica lo que existe.** Desde el
+  momento en que haya conversaciones reales guardadas, cualquier cambio de
+  esquema pasa a ser un `ALTER TABLE` a mano contra la base de producción:
+  manual y riesgoso. Ahí es cuando conviene sumar Alembic, no antes.
+- **Los enums son tipos nativos de Postgres.** `RolMensaje` y `motivo_pausa`
+  se crean bien la primera vez, pero **agregar un valor nuevo a cualquiera de
+  los dos va a requerir un `ALTER TYPE ... ADD VALUE` a mano**, porque
+  `create_all` no toca un tipo que ya existe. Con SQLite esto no se nota: ahí
+  los enums son texto con un CHECK y el problema no aparece. Hoy no molesta;
+  molesta el día que se agregue un rol (un canal web con rol propio, por
+  ejemplo) o un motivo de pausa nuevo, y el síntoma va a ser un
+  `InvalidTextRepresentation` en runtime, no un error al arrancar.
+
+---
+
+## 5.c. Pool de conexiones vs. threadpool de background tasks — antes del deploy
+
+El engine de `app/db.py` no fija `pool_size` ni `max_overflow`: quedan en el
+default de SQLAlchemy (`pool_size=5`, `max_overflow=10` → **15 conexiones por
+proceso**). Con SQLite este número no importa —no hay pool de conexiones de
+red—, así que el desbalance de abajo no se nota hasta Postgres.
+
+- **El threadpool de background tasks es más grande que el pool de
+  conexiones.** `procesar_mensaje_entrante` corre en el threadpool de AnyIO
+  que usa Starlette para las `BackgroundTasks` (default **40 hilos**). En una
+  ráfaga de mensajes, hasta 40 tareas concurrentes pelean por 15 conexiones:
+  las que no consiguen una bloquean hasta 30s en el checkout (`pool_timeout`)
+  y si se agota tiran `TimeoutError`.
+- **Agrava esto que la sesión queda tomada durante toda la llamada al
+  modelo, no sólo durante el acceso a la base.** `construir_historial`
+  (`app/main.py:301`) abre una transacción con un SELECT y no se commitea
+  hasta `enviar_y_guardar`; en el medio corre `generar_respuesta`, con un
+  presupuesto de hasta 20s (`PRESUPUESTO_TOTAL_SEGUNDOS`, ver CLAUDE.md). Una
+  conexión de Postgres queda retenida por un mensaje entero, no por una
+  query.
+- **Consecuencia si esto revienta:** el `TimeoutError` cae en el
+  `except Exception` de `procesar_mensaje_entrante` (`app/main.py:416`), que
+  loguea y sigue — el webhook ya devolvió 200 y Meta no reintenta, así que el
+  mensaje se pierde en silencio salvo que alguien esté mirando el log de
+  Render en ese momento.
+
+No se tocan los números en esta migración porque hace falta un dato que
+todavía no tenemos: cuántos workers va a levantar el start command de Render
+(ver el punto siguiente) y qué límite de conexiones tiene el plan de Postgres
+elegido. Subir `pool_size`/`max_overflow` a ciegas puede agotar ese límite si
+hay más de un worker.
+
+**El start command de Render tiene que ser de un solo worker** (p. ej.
+`uvicorn app.main:app --host 0.0.0.0 --port $PORT`, sin `--workers`). El
+engine de `app/db.py` es una variable de módulo: cada worker de uvicorn es un
+proceso propio con su propio engine y su propio pool, así que un segundo
+worker no comparte las 15 conexiones — las duplica. Con dos workers son 30
+conexiones disputando el límite del plan de Postgres, no 15.
 
 ---
 

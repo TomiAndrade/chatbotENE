@@ -106,6 +106,31 @@ no anda.
 Cambiar `DATABASE_URL` en `.env` (ej.
 `postgresql://usuario:password@host:5432/nombre_db`). No hay que tocar código.
 
+En Render la variable se enlaza desde la base administrada, no se escribe a
+mano. Render la entrega con el prefijo `postgres://`, que SQLAlchemy ya no
+acepta: `normalizar_url` (`app/db.py`) lo convierte a `postgresql://` al
+arrancar, así que se puede pegar tal cual viene y sobrevive a una rotación de
+credenciales.
+
+Las tablas las crea `init_db()` al levantar la app. **No hay migraciones**:
+`create_all` crea lo que falta pero no modifica nada existente, así que
+cualquier cambio de esquema —incluido agregar un valor a `RolMensaje` o a
+`motivo_pausa`, que en Postgres son tipos nativos— hay que aplicarlo a mano
+con SQL. Ver PENDIENTES.md.
+
+Antes de deployar conviene validar a mano contra la base real, porque las
+diferencias que trae Postgres son justo las que SQLite no reproduce:
+
+1. Apuntar `DATABASE_URL` a la base de Render desde la máquina local.
+2. Arrancar la app y confirmar que `init_db()` crea las tablas sin error.
+3. Guardar una conversación (con `modo_humano_desde`) y un mensaje.
+4. Releerlos y confirmar que las fechas vuelven con `tzinfo` **no nulo**.
+5. Insertar dos mensajes con el mismo `wa_message_id`: el segundo tiene que
+   tirar `IntegrityError` y el `rollback` dejar la sesión usable. Postgres
+   aborta la transacción entera ante una constraint violada, más estricto que
+   SQLite — hay que confirmar que el camino de idempotencia de
+   `procesar_mensaje_entrante` sigue funcionando igual.
+
 ## Cambiar el proveedor de respuestas
 
 `PROVEEDOR_IA` selecciona la implementación: `fijo` (sin IA, para tests),
