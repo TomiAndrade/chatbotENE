@@ -1,8 +1,11 @@
 # Bot WhatsApp — ENE IA LAB
 
-Bot de WhatsApp (Kapso) → servidor FastAPI → base de datos → respuesta.
-Etapa 1 (plomería) y etapa 2 (IA, historial y escalamiento) implementadas —
-ver `spec-etapa1.md` y `spec-etapa2.md` para el detalle completo.
+Bot de WhatsApp (Cloud API de Meta, conexión directa) → servidor FastAPI →
+base de datos → respuesta. Etapa 1 (plomería), etapa 2 (IA, historial y
+escalamiento) y la migración de Kapso a Meta implementadas — ver
+`spec-etapa1.md`, `spec-etapa2.md` y `spec-meta-cloud-api.md` para el detalle
+completo. `app/kapso.py` y sus tests siguen en el repo, sin usarse, hasta
+validar Meta en producción.
 
 ## Setup
 
@@ -22,14 +25,18 @@ copy .env.example .env
 
 Completar en `.env`:
 
-- `KAPSO_API_KEY` y `KAPSO_PHONE_NUMBER_ID`: los del proyecto/número sandbox en
-  el dashboard de Kapso.
-- `KAPSO_WEBHOOK_SECRET`: se genera al configurar el webhook (paso 5). Se
-  puede dejar vacío para levantar el server antes de tenerlo, pero entonces
+- `META_PHONE_NUMBER_ID`: el ID del número, del panel de developers.facebook.com
+  (app de WhatsApp Business → API Setup).
+- `META_ACCESS_TOKEN`: token permanente del System User (no el temporal de 24hs
+  que da la consola de pruebas).
+- `META_APP_SECRET`: App Secret de la app, en Configuración básica del panel.
+  Se puede dejar vacío para levantar el server antes de tenerlo, pero entonces
   **no se verifica la firma de los webhooks entrantes** y cualquiera que
   conozca la URL puede inyectar mensajes falsos. Por eso el server solo lo
   permite con `DEBUG=true`: con `DEBUG=false` y el secreto vacío, todos los
   webhooks se rechazan con 401.
+- `META_VERIFY_TOKEN`: lo inventás vos (cualquier string) y lo cargás igual
+  acá y en el panel al configurar la URL del webhook (paso 5).
 
 ### 3. Base de datos
 
@@ -44,26 +51,33 @@ uvicorn app.main:app --reload
 
 Verificar que responde: `GET http://localhost:8000/health` → `{"status": "ok"}`.
 
-### 5. Levantar ngrok y configurar el webhook en Kapso
+### 5. Levantar ngrok y configurar el webhook en el panel de Meta
 
 ```bash
 ngrok http 8000
 ```
 
-Copiar la URL `https://...ngrok...` que muestra ngrok. En el dashboard de
-Kapso, en el número sandbox, configurar el webhook destination con:
+Copiar la URL `https://...ngrok...` que muestra ngrok. En
+developers.facebook.com, en la app de WhatsApp Business → Configuration,
+configurar el webhook con:
 
-- URL: `https://<tu-url-de-ngrok>/webhook`
-- Eventos: `whatsapp.message.received` y `whatsapp.message.sent` (este último
-  es el que permite detectar cuándo la secretaría responde desde la app de
-  WhatsApp Business y pausar al bot — ver
-  spec-pausa-por-intervencion-humana.md)
+- Callback URL: `https://<tu-url-de-ngrok>/webhook`
+- Verify token: el mismo valor que `META_VERIFY_TOKEN` en `.env`
+- Suscribirse al campo `messages`
 
-Copiar el secreto que Kapso genera para ese webhook a `KAPSO_WEBHOOK_SECRET`
-en `.env` y reiniciar el servidor.
+Meta valida la URL con un `GET /webhook` antes de guardarla — si
+`META_VERIFY_TOKEN` no coincide, el panel muestra error y no la acepta.
+
+**Nota sobre `whatsapp.message.sent` (pausa por intervención manual):** con
+Kapso, un evento de ese tipo permitía detectar cuándo la secretaría
+respondía desde la app de WhatsApp Business y pausar al bot (ver
+spec-pausa-por-intervencion-humana.md). La Cloud API de Meta no tiene ese
+disparador — no hay app de negocio, los mensajes salen por API o no salen
+(spec-meta-cloud-api.md, sección 5). Esa función (`procesar_mensaje_saliente`)
+sigue en el código, dormida, por si más adelante Meta habilita Coexistence.
 
 El panel de ngrok en `http://localhost:4040` muestra cada request entrante —
-útil para ver si Kapso está pegándole al webhook y con qué payload, si algo
+útil para ver si Meta está pegándole al webhook y con qué payload, si algo
 no anda.
 
 ## Probar el flujo
@@ -108,7 +122,7 @@ nuevo es sumar una clase en `app/proveedor_<nombre>.py` y registrarla en
 pytest
 ```
 
-No pegan a ninguna API real: Kapso se mockea (`kapso_enviados` en
+No pegan a ninguna API real: Meta se mockea (`meta_enviados` en
 `tests/conftest.py`) y el proveedor de IA se mockea por test cuando hace
 falta (`fijo` no necesita mock). Usan una base SQLite aparte, en un
 directorio temporal, no `bot.db`.

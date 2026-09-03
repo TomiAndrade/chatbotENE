@@ -23,9 +23,9 @@ git push origin develop
 gh pr create                  # PR de develop → main, nunca merge directo
 ```
 
-El proyecto está planificado en etapas. `spec-etapa1.md` y `spec-etapa2.md` son
-los specs completos de lo implementado y mandan sobre este archivo si algo se
-contradice.
+El proyecto está planificado en etapas. `spec-etapa1.md`, `spec-etapa2.md` y
+`spec-meta-cloud-api.md` son los specs completos de lo implementado y mandan
+sobre este archivo si algo se contradice.
 
 ## Estado
 
@@ -44,6 +44,14 @@ proveedor.
 
 El servidor corre en el puerto **8000** (uvicorn), no 3000 — así lo espera
 `ngrok http 8000` y así está documentado en el README.
+
+**Migración de Kapso a la Cloud API de Meta (spec-meta-cloud-api.md):
+código completo y con tests, sin validar contra el panel real de Meta.**
+`app/meta.py` reemplaza a `app/kapso.py` como cliente activo; `app/kapso.py`
+y sus tests quedan en el repo, sin usarse, hasta esa validación. Falta
+probar contra developers.facebook.com: el GET de verificación del webhook,
+un mensaje real de ida y vuelta, y la firma `X-Hub-Signature-256` con un App
+Secret real.
 
 Pendiente conocido, decidido explícitamente y no un olvido: **la respuesta del
 bot se guarda con `wa_message_id = None`**. Kapso devuelve el id en
@@ -64,7 +72,11 @@ que hacen falta para entender el diseño.
 - httpx para las llamadas a Kapso y al proveedor `openai_compat`, python-dotenv
   para la config
 - ngrok para exponer el webhook en desarrollo (externo, no es parte del código)
-- **Kapso** (https://docs.kapso.ai) como capa sobre la WhatsApp Cloud API de Meta
+- **Cloud API de Meta** (developers.facebook.com/docs/whatsapp), conexión
+  directa desde `app/meta.py` — sin intermediario. Hasta agosto 2026 el bot
+  usaba **Kapso** (https://docs.kapso.ai) como capa sobre esa misma API;
+  `app/kapso.py` y sus tests siguen en el repo, sin usarse, hasta validar
+  Meta en producción (ver spec-meta-cloud-api.md y la sección de abajo).
 - **anthropic** (Claude, producción) y **`openai_compat`** (desarrollo: un solo
   proveedor parametrizado por `BASE_URL`, sirve para cualquier endpoint con
   formato de la API de OpenAI — OpenRouter, DeepSeek, el free de NVIDIA, un
@@ -72,11 +84,44 @@ que hacen falta para entender el diseño.
 - **tzdata**: necesario en Windows para que `zoneinfo` resuelva
   `America/Argentina/Buenos_Aires` (no hay base de tz del sistema operativo)
 
-## Contrato con Kapso (verificado contra la doc, no asumido)
+## Contrato con la Cloud API de Meta (verificado contra la doc, no asumido)
+
+Vigente desde la migración de Kapso (spec-meta-cloud-api.md). `app/meta.py`
+es la implementación; `app/kapso.py` queda con el contrato viejo, documentado
+más abajo, sin usarse.
+
+- Enviar texto: `POST https://graph.facebook.com/{META_API_VERSION}/{phone_number_id}/messages`,
+  header `Authorization: Bearer {token}`, payload
+  `messaging_product`/`recipient_type`/`to`/`type`/`text.body` — idéntico al
+  de Kapso. Responde con `messages[0].id`.
+- Webhook entrante: payload con envelope `entry[].changes[].value`. Un solo
+  POST puede traer varios `entry`/`changes`, cada uno con varios `messages[]`
+  (de personas distintas incluso) — hay que iterar todo, no asumir un solo
+  mensaje. Los campos son `messages[].id`, `messages[].from`,
+  `messages[].type`, `messages[].text.body`. Cuando el evento es de entrega
+  en vez de mensaje, `value` trae `statuses[]` en lugar de `messages[]`: se
+  descarta explícitamente (chequeo positivo de que `messages` está, no por
+  descarte) y se responde 200 igual — un 4xx/5xx hace que Meta reintente y,
+  si se repite, que desuscriba el webhook.
+- Verificación de la URL del webhook: Meta manda un `GET /webhook` con
+  `hub.mode`, `hub.verify_token` y `hub.challenge` antes de empezar a mandar
+  eventos. Si `hub.mode == "subscribe"` y el token coincide con
+  `META_VERIFY_TOKEN`, hay que devolver `hub.challenge` como texto plano
+  (`verificar_webhook` en `app/main.py`).
+- Firma: header `X-Hub-Signature-256`, valor `sha256=<hex>` — HMAC-SHA256 del
+  body crudo con `META_APP_SECRET` (el App Secret de la app de Meta, no un
+  secreto que se configure aparte). Hay que sacar el prefijo `sha256=` antes
+  de comparar (`verificar_firma_webhook` en `app/meta.py`).
+- **Números argentinos: no normalizar.** `messages[].from` viene con el "9"
+  presente o no, según cómo Meta lo resuelva internamente — no siempre
+  coincide con cómo la persona tiene guardado el número. Se guarda y se
+  responde con ese valor exacto, verbatim; normalizarlo duplica contactos o
+  rompe el envío.
+
+### Contrato con Kapso (histórico, `app/kapso.py` sin usarse)
 
 - Enviar texto: `POST https://api.kapso.ai/meta/whatsapp/v24.0/{phone_number_id}/messages`,
-  header `X-API-Key`, payload `messaging_product`/`recipient_type`/`to`/`type`/`text.body`.
-  Responde con `messages[0].id`.
+  header `X-API-Key`, mismo payload que arriba. Responde con `messages[0].id`.
 - Webhook entrante: payload **sin envelope**, con `message` y `conversation` en
   la raíz. Los campos son `message.id`, `message.from`, `message.type`,
   `message.text.body`.
@@ -100,11 +145,13 @@ que hacen falta para entender el diseño.
   `enmascarar_telefono`) sigue tapando el medio de la cadena sin asumir formato
   de teléfono, así que sirve igual para un id de otro canal. No se implementó
   nada del canal web todavía — es solo el modelo de datos.
-- **El endpoint `/webhook` no toca la base ni la red.** Verifica firma, parsea y
-  encola; dedup, guardado y respuesta corren en la background task
+- **El endpoint `POST /webhook` no toca la base ni la red.** Verifica firma,
+  parsea y encola; dedup, guardado y respuesta corren en la background task
   `procesar_mensaje_entrante`, que Starlette ejecuta en threadpool después de
   haber mandado el 200. Consecuencia: los fallos de procesamiento se ven en el
-  log, no como 500 en el panel de Kapso.
+  log, no como error en el panel de Meta. `GET /webhook` (challenge de
+  verificación) es la excepción: responde en el mismo request, no hay nada
+  que encolar.
 - **Toda la generación de respuestas vive detrás de
   `generar_respuesta(historial, mensaje_nuevo) -> RespuestaGenerada`**
   (`respuesta.py`), seleccionable con `PROVEEDOR_IA` (`fijo`/`openai_compat`/`claude`).
@@ -143,10 +190,12 @@ que hacen falta para entender el diseño.
 - **La dedup es por `wa_message_id`**, con el `SELECT` previo y además
   `IntegrityError` atrapado: entregas concurrentes del mismo webhook pasan las
   dos el chequeo, y la constraint única es la que decide. Los reintentos de
-  Kapso son normales, no un error.
+  Meta son normales, no un error.
 - **Se reintenta solo lo que puede salir distinto**: errores de red, 429 y 5xx,
   con backoff 1s → 2s. Los demás 4xx fallan al primer intento y loguean el body
-  de la respuesta de Kapso, que es donde viene el motivo real.
+  de la respuesta de Meta, que es donde viene el motivo real. Misma lógica
+  duplicada en `app/meta.py` y `app/kapso.py` (histórico) — el spec de la
+  migración pidió copiar y adaptar, no compartir código entre los dos.
 - **`modo_humano` se re-lee de la base justo antes de enviar**
   (`esta_en_modo_humano` en `main.py`), no sólo al empezar a procesar el
   mensaje. Si el bot escribe encima de un humano, la experiencia se rompe — y
@@ -159,10 +208,45 @@ que hacen falta para entender el diseño.
   el resumen del primer escalamiento le saca contexto a quien atienda.
 - **El escalamiento no es atómico y el orden importa.** Primero el commit de
   `modo_humano`/`resumen`/`escalada_en`, después el `WARNING` de
-  `ESCALADO A HUMANO`, y recién al final el aviso al usuario. Si Kapso está
+  `ESCALADO A HUMANO`, y recién al final el aviso al usuario. Si Meta está
   caído el escalamiento ya ocurrió igual, así que tiene que quedar en el log
   sí o sí; el fallo del aviso se loguea aparte y diciendo qué se perdió, no
   como un error de envío genérico.
+- **La pausa por intervención manual (`procesar_mensaje_saliente`,
+  `registrar_intervencion_humana`) quedó dormida con la migración a Meta.**
+  Dependía de que Kapso mandara `whatsapp.message.sent` con
+  `message.kapso.direction`/`origin`, algo que solo existía en modo
+  coexistencia de Kapso — la Cloud API de Meta no tiene ese evento ni ese
+  campo (spec-meta-cloud-api.md, sección 5). El filtro que decidía si un
+  evento así venía de la secretaría o del propio bot vivía inline en el
+  `POST /webhook` viejo y se borró junto con el resto del ruteo por
+  `X-Webhook-Event` — no tiene sentido bajo el payload de Meta. Las dos
+  funciones siguen enteras y sus tests las llaman directo
+  (`tests/test_pausa_humana.py`), por si más adelante Meta habilita
+  Coexistence u otra bandeja dispara este flujo de nuevo.
+- **Un bug propio no se puede tragar un mensaje en silencio, ni en el
+  webhook ni en la background task.** Dos puntos separados, los dos en
+  `app/main.py`:
+  - `POST /webhook` distingue payload raro de bug propio. Un `json.JSONDecodeError`
+    o una excepción de forma (`AttributeError`/`TypeError`/`KeyError` al
+    navegar `entry`/`changes`/`value`) es un dato de entrada inesperado, no
+    un bug: `WARNING` y 200. Cualquier otra excepción es sospechosa de ser
+    un bug propio: `ERROR` con `exc_info=True` (traceback completo) y el
+    body crudo recortado a 2000 caracteres (`_cuerpo_para_loguear`), 200
+    igual — Meta no puede saber que algo salió mal del lado del servidor.
+  - `procesar_mensaje_entrante` tiene un `except Exception` propio, además
+    del `except IntegrityError` puntual del commit. Starlette corre las
+    background tasks *después* de mandar la respuesta HTTP
+    (`Response.__call__`: `send` del 200, recién después `await
+    background()`), así que para cuando algo revienta acá ya no hay
+    respuesta que cambiar — y sin este catch, la excepción se escapa hacia
+    el runner de background tasks de Starlette y termina en el logger de
+    uvicorn, no en `logger("bot")`: sin `identificador_externo` ni
+    `wa_message_id`, sin la garantía de que alguien lo esté mirando. Se
+    verificó leyendo el código de Starlette 1.3.1
+    (`starlette.background.BackgroundTasks.__call__`,
+    `starlette.middleware.errors.ServerErrorMiddleware.__call__`), no
+    asumido.
 - **`prompts/system-prompt.md` y `prompts/knowledge-base.md` se leen una sola
   vez al importar `app/prompt.py`** (no en cada mensaje). Los bloques
   `[PENDIENTE]` del knowledge base se dejan tal cual a propósito: le indican al
@@ -190,7 +274,7 @@ que hacen falta para entender el diseño.
   regla del proyecto, no una omisión temporal.
 - `.env` y `bot.db` van en `.gitignore`. Ninguna clave hardcodeada, tampoco en
   comentarios ni en tests.
-- Sin `KAPSO_WEBHOOK_SECRET`, el webhook queda abierto a cualquiera que conozca
+- Sin `META_APP_SECRET`, el webhook queda abierto a cualquiera que conozca
   la URL. Por eso solo se deja pasar con `DEBUG=true`; con `DEBUG=false` se
   rechaza todo con 401. Ojo con el default — ver el checklist de deploy.
 - El código lo lee y mantiene un estudiante de Ciencias de la Computación con
@@ -201,7 +285,9 @@ que hacen falta para entender el diseño.
 
 El deploy está fuera de alcance por ahora, pero esto hay que resolverlo antes:
 
-- **Poner `DEBUG=false` y `KAPSO_WEBHOOK_SECRET` con valor.** El default de
+- **Poner `DEBUG=false` y `META_APP_SECRET` con valor**, además de
+  `META_PHONE_NUMBER_ID`, `META_ACCESS_TOKEN` (el token permanente del System
+  User, no el temporal de 24hs) y `META_VERIFY_TOKEN`. El default de
   `.env.example` es `DEBUG=true` con el secreto vacío, que es lo correcto para
   desarrollar pero deja el webhook abierto. El problema es que **si alguien se
   olvida de cambiarlo en producción, nada falla ruidosamente**: el server
@@ -222,10 +308,12 @@ El deploy está fuera de alcance por ahora, pero esto hay que resolverlo antes:
 
 ## Etapas siguientes
 
-Con la etapa 2 (LLM, historial, escalamiento) implementada, no queda un
-"etapa 3" definida en un spec propio — lo que sigue es validar etapa 2 contra
-servicios reales (ver "Estado" arriba) y, más adelante, lo que ya estaba fuera
-de alcance:
+Con la etapa 2 (LLM, historial, escalamiento) y la migración a la Cloud API
+de Meta (spec-meta-cloud-api.md) implementadas, no queda un "etapa 3"
+definida en un spec propio — lo que sigue es validar contra servicios reales
+(ver "Estado" arriba: la migración a Meta tampoco se probó todavía contra el
+panel real, solo con la suite de tests) y, más adelante, lo que ya estaba
+fuera de alcance:
 
 Fuera de alcance hasta que se diga lo contrario: feriados (se tratan como día
 hábil), deploy, transcripción de audios, mensajes con botones/listas/
@@ -234,23 +322,25 @@ desmarca `modo_humano` a mano en la base).
 
 ## Tests
 
-`tests/` con pytest, 63 tests. No pegan a ninguna API real: Kapso se mockea
-(`kapso_enviados`, fixture en `tests/conftest.py`) y el proveedor de IA se
+`tests/` con pytest, 103 tests. No pegan a ninguna API real: Meta se mockea
+(`meta_enviados`, fixture en `tests/conftest.py`) y el proveedor de IA se
 mockea por test parcheando `app.main.generar_respuesta` (`fijo` no necesita
 mock); los dos proveedores con IA se prueban con dobles (`httpx.MockTransport`
 para `openai_compat`, un cliente falso para `claude`). Usan una base SQLite en
 un directorio temporal, no `bot.db`. Cubren: flujo completo del webhook,
-matriz de firma, reintentos de Kapso, carrera de entregas concurrentes con
+matriz de firma y challenge de Meta, statuses[] descartado, varios mensajes
+en un mismo entry, reintentos de Meta, carrera de entregas concurrentes con
 hilos, armado de historial y corte por antigüedad, mensaje de escalamiento
 según horario, escalamiento por tool calling, fallo del modelo, error
-transitorio del proveedor, límite por número, y parseo de tool calls de los
-dos proveedores.
+transitorio del proveedor, límite por número, parseo de tool calls de los
+dos proveedores, y `app/kapso.py` (histórico, sin usarse) con su propia
+matriz de firma y reintentos.
 
 Dos cosas al escribir tests acá, aprendidas de una revisión en la que los
 tests pasaban por un vacío:
 
 - **Afirmar el contenido de lo que se envió, no sólo cuántos mensajes
-  salieron.** Un `assert len(kapso_enviados) == 2` pasa igual si el aviso de
+  salieron.** Un `assert len(meta_enviados) == 2` pasa igual si el aviso de
   escalamiento fuera cualquier texto. Los asserts del aviso van contra las
   constantes de `app.mensajes` (o contra `AVISOS_DE_ESCALAMIENTO` de
   `tests/helpers.py`), nunca contra el resultado de llamar a

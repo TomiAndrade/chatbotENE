@@ -14,6 +14,11 @@ class Config:
     kapso_api_key: str
     kapso_phone_number_id: str
     kapso_webhook_secret: str
+    meta_phone_number_id: str
+    meta_access_token: str
+    meta_app_secret: str
+    meta_verify_token: str
+    meta_api_version: str
     database_url: str
     proveedor_ia: str
     debug: bool
@@ -34,6 +39,11 @@ def _cargar_config() -> Config:
         kapso_api_key=os.getenv("KAPSO_API_KEY", ""),
         kapso_phone_number_id=os.getenv("KAPSO_PHONE_NUMBER_ID", ""),
         kapso_webhook_secret=os.getenv("KAPSO_WEBHOOK_SECRET", ""),
+        meta_phone_number_id=os.getenv("META_PHONE_NUMBER_ID", ""),
+        meta_access_token=os.getenv("META_ACCESS_TOKEN", ""),
+        meta_app_secret=os.getenv("META_APP_SECRET", ""),
+        meta_verify_token=os.getenv("META_VERIFY_TOKEN", ""),
+        meta_api_version=os.getenv("META_API_VERSION", "v23.0"),
         database_url=os.getenv("DATABASE_URL", "sqlite:///./bot.db"),
         proveedor_ia=os.getenv("PROVEEDOR_IA", "fijo"),
         debug=os.getenv("DEBUG", "false").lower() == "true",

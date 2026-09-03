@@ -11,21 +11,18 @@ from app.mensajes import MENSAJE_ERROR_GENERICO, MENSAJE_ERROR_TRANSITORIO
 from app.models import Conversacion
 from app.respuesta import ErrorTransitorioProveedor
 from tests.conftest import TELEFONO_DE_PRUEBA
-from tests.helpers import AVISOS_DE_ESCALAMIENTO, firmar, payload_mensaje_texto
+from tests.helpers import AVISOS_DE_ESCALAMIENTO, firmar_meta, payload_meta_texto
 
-SECRETO = "test-webhook-secret"
+SECRETO = "test-app-secret"
 
 
 def _post_mensaje(client, wa_message_id: str, texto: str):
-    payload = payload_mensaje_texto(wa_message_id, TELEFONO_DE_PRUEBA, texto)
+    payload = payload_meta_texto(wa_message_id, TELEFONO_DE_PRUEBA, texto)
     cuerpo = json.dumps(payload).encode("utf-8")
     return client.post(
         "/webhook",
         content=cuerpo,
-        headers={
-            "X-Webhook-Signature": firmar(cuerpo, SECRETO),
-            "X-Webhook-Event": "whatsapp.message.received",
-        },
+        headers={"X-Hub-Signature-256": firmar_meta(cuerpo, SECRETO)},
     )
 
 
@@ -33,7 +30,7 @@ def _reventar_transitorio(historial, mensaje_nuevo):
     raise ErrorTransitorioProveedor("Proveedor devolvió error en el body: saturado")
 
 
-def test_en_desarrollo_no_escala_y_pide_reintentar(client, kapso_enviados, monkeypatch):
+def test_en_desarrollo_no_escala_y_pide_reintentar(client, meta_enviados, monkeypatch):
     monkeypatch.setattr(config, "debug", True)
     monkeypatch.setattr(main_mod, "generar_respuesta", _reventar_transitorio)
 
@@ -44,14 +41,14 @@ def test_en_desarrollo_no_escala_y_pide_reintentar(client, kapso_enviados, monke
     db.close()
 
     assert conversacion.modo_humano is False
-    textos = [texto for _, texto in kapso_enviados]
+    textos = [texto for _, texto in meta_enviados]
     assert len(textos) == 1
     assert textos[0] == MENSAJE_ERROR_TRANSITORIO
     # Y nada de avisos de escalamiento: en desarrollo esto no escala.
     assert not AVISOS_DE_ESCALAMIENTO.intersection(textos)
 
 
-def test_en_produccion_escala_como_cualquier_otro_fallo(client, kapso_enviados, monkeypatch):
+def test_en_produccion_escala_como_cualquier_otro_fallo(client, meta_enviados, monkeypatch):
     monkeypatch.setattr(config, "debug", False)
     monkeypatch.setattr(main_mod, "generar_respuesta", _reventar_transitorio)
 
@@ -63,7 +60,7 @@ def test_en_produccion_escala_como_cualquier_otro_fallo(client, kapso_enviados, 
 
     assert conversacion.modo_humano is True
     assert conversacion.resumen_escalamiento == "Error automático: error transitorio del proveedor de IA."
-    textos = [texto for _, texto in kapso_enviados]
+    textos = [texto for _, texto in meta_enviados]
     assert len(textos) == 2
     assert textos[0] == MENSAJE_ERROR_GENERICO
     assert textos[1] in AVISOS_DE_ESCALAMIENTO

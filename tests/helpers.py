@@ -1,5 +1,6 @@
-"""Helpers para armar y firmar payloads de webhook como los manda Kapso, y
-para fijar el reloj que ve el código que arma el aviso de escalamiento."""
+"""Helpers para armar y firmar payloads de webhook como los manda la Cloud
+API de Meta, y para fijar el reloj que ve el código que arma el aviso de
+escalamiento."""
 
 import hashlib
 import hmac
@@ -47,54 +48,68 @@ class RelojFijo:
         return self._instante.astimezone(tz)
 
 
-def firmar(cuerpo: bytes, secreto: str) -> str:
-    return hmac.new(secreto.encode("utf-8"), cuerpo, hashlib.sha256).hexdigest()
+def firmar_meta(cuerpo: bytes, secreto: str) -> str:
+    """Firma en el formato exacto del header X-Hub-Signature-256 de Meta:
+    con el prefijo "sha256=", no solo el hexdigest."""
+    return "sha256=" + hmac.new(secreto.encode("utf-8"), cuerpo, hashlib.sha256).hexdigest()
 
 
-def payload_mensaje_texto(wa_message_id: str, telefono: str, texto: str) -> dict:
+def mensaje_meta_texto(wa_message_id: str, telefono: str, texto: str) -> dict:
     return {
-        "message": {
-            "id": wa_message_id,
-            "from": telefono,
-            "type": "text",
-            "text": {"body": texto},
-        },
-        "conversation": {"phone_number": telefono},
+        "from": telefono,
+        "id": wa_message_id,
+        "timestamp": "1735689600",
+        "type": "text",
+        "text": {"body": texto},
     }
 
 
-_SIN_VALOR = object()
-
-
-def payload_mensaje_saliente(
-    wa_message_id: str,
-    telefono: str,
-    texto: str,
-    direction: str | None = "outbound",
-    origin=_SIN_VALOR,
-) -> dict:
-    """Payload de `whatsapp.message.sent` (spec-pausa-por-intervencion-
-    humana.md, sección 2). `direction` y `origin` viven en `message.kapso`.
-
-    `origin` no tiene default propio: por defecto (`_SIN_VALOR`) la clave
-    `origin` ni se incluye, para poder simular el caso "campo ausente" del
-    spec sin un `None` explícito que no es lo mismo que faltar la clave.
-    Pasar `None` explícito para el caso "valor null"; cualquier otro string
-    simula un valor inesperado.
-    """
-    kapso: dict = {}
-    if direction is not None:
-        kapso["direction"] = direction
-    if origin is not _SIN_VALOR:
-        kapso["origin"] = origin
-
+def payload_meta_mensajes(mensajes: list[dict], phone_number_id: str = "000000000000") -> dict:
+    """Un payload de webhook de Meta con uno o más `messages` en el mismo
+    `entry`/`changes` (spec-meta-cloud-api.md, sección 2)."""
     return {
-        "message": {
-            "id": wa_message_id,
-            "to": telefono,
-            "type": "text",
-            "text": {"body": texto},
-            "kapso": kapso,
-        },
-        "conversation": {"id": "conv_de_prueba", "phone_number": telefono},
+        "object": "whatsapp_business_account",
+        "entry": [
+            {
+                "id": "waba_de_prueba",
+                "changes": [
+                    {
+                        "field": "messages",
+                        "value": {
+                            "metadata": {"phone_number_id": phone_number_id},
+                            "contacts": [{"profile": {"name": "Test"}, "wa_id": m.get("from")} for m in mensajes],
+                            "messages": mensajes,
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+
+def payload_meta_texto(wa_message_id: str, telefono: str, texto: str) -> dict:
+    """El caso común de los tests: un solo mensaje de texto."""
+    return payload_meta_mensajes([mensaje_meta_texto(wa_message_id, telefono, texto)])
+
+
+def payload_meta_statuses(wa_message_id: str, telefono: str, status: str = "delivered") -> dict:
+    """Payload de confirmación de entrega: `value` trae `statuses[]` en vez
+    de `messages[]` (spec-meta-cloud-api.md, sección 2). Hay que descartarlo
+    explícitamente, no procesar nada."""
+    return {
+        "object": "whatsapp_business_account",
+        "entry": [
+            {
+                "id": "waba_de_prueba",
+                "changes": [
+                    {
+                        "field": "messages",
+                        "value": {
+                            "metadata": {"phone_number_id": "000000000000"},
+                            "statuses": [{"id": wa_message_id, "status": status, "recipient_id": telefono}],
+                        },
+                    }
+                ],
+            }
+        ],
     }

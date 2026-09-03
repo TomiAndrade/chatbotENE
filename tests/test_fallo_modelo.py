@@ -15,34 +15,31 @@ from app.mensajes import MENSAJE_ERROR_GENERICO
 from app.models import Conversacion
 from app.respuesta import RespuestaGenerada
 from tests.conftest import TELEFONO_DE_PRUEBA
-from tests.helpers import AVISOS_DE_ESCALAMIENTO, firmar, payload_mensaje_texto
+from tests.helpers import AVISOS_DE_ESCALAMIENTO, firmar_meta, payload_meta_texto
 
-SECRETO = "test-webhook-secret"
+SECRETO = "test-app-secret"
 
 
 def _post_mensaje(client, wa_message_id: str, texto: str, telefono: str = TELEFONO_DE_PRUEBA):
-    payload = payload_mensaje_texto(wa_message_id, telefono, texto)
+    payload = payload_meta_texto(wa_message_id, telefono, texto)
     cuerpo = json.dumps(payload).encode("utf-8")
     return client.post(
         "/webhook",
         content=cuerpo,
-        headers={
-            "X-Webhook-Signature": firmar(cuerpo, SECRETO),
-            "X-Webhook-Event": "whatsapp.message.received",
-        },
+        headers={"X-Hub-Signature-256": firmar_meta(cuerpo, SECRETO)},
     )
 
 
-def _afirmar_disculpa_y_aviso(kapso_enviados) -> None:
+def _afirmar_disculpa_y_aviso(meta_enviados) -> None:
     """La secuencia esperada en todo fallo del modelo: disculpa genérica y
     después el aviso de que la conversación pasó a una persona."""
-    textos = [texto for _, texto in kapso_enviados]
+    textos = [texto for _, texto in meta_enviados]
     assert len(textos) == 2
     assert textos[0] == MENSAJE_ERROR_GENERICO
     assert textos[1] in AVISOS_DE_ESCALAMIENTO
 
 
-def test_si_la_llamada_al_modelo_falla_se_disculpa_y_escala(client, kapso_enviados, monkeypatch):
+def test_si_la_llamada_al_modelo_falla_se_disculpa_y_escala(client, meta_enviados, monkeypatch):
     def _reventar(historial, mensaje_nuevo):
         raise TimeoutError("el modelo tardó demasiado")
 
@@ -55,10 +52,10 @@ def test_si_la_llamada_al_modelo_falla_se_disculpa_y_escala(client, kapso_enviad
     db.close()
 
     assert conversacion.modo_humano is True
-    _afirmar_disculpa_y_aviso(kapso_enviados)
+    _afirmar_disculpa_y_aviso(meta_enviados)
 
 
-def test_respuesta_vacia_sin_escalar_se_trata_como_error(client, kapso_enviados, monkeypatch):
+def test_respuesta_vacia_sin_escalar_se_trata_como_error(client, meta_enviados, monkeypatch):
     monkeypatch.setattr(
         main_mod,
         "generar_respuesta",
@@ -72,10 +69,10 @@ def test_respuesta_vacia_sin_escalar_se_trata_como_error(client, kapso_enviados,
     db.close()
 
     assert conversacion.modo_humano is True
-    _afirmar_disculpa_y_aviso(kapso_enviados)
+    _afirmar_disculpa_y_aviso(meta_enviados)
 
 
-def test_respuesta_de_solo_espacios_sin_escalar_tambien_se_trata_como_error(client, kapso_enviados, monkeypatch):
+def test_respuesta_de_solo_espacios_sin_escalar_tambien_se_trata_como_error(client, meta_enviados, monkeypatch):
     """Ver PENDIENTES.md, sección 7: un texto de sólo espacios pasaba el
     chequeo original (`texto is None`) y terminaba enviándose como si fuera
     una respuesta válida, sin escalar."""
@@ -92,4 +89,4 @@ def test_respuesta_de_solo_espacios_sin_escalar_tambien_se_trata_como_error(clie
     db.close()
 
     assert conversacion.modo_humano is True
-    _afirmar_disculpa_y_aviso(kapso_enviados)
+    _afirmar_disculpa_y_aviso(meta_enviados)

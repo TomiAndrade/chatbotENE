@@ -18,6 +18,11 @@ os.environ["DATABASE_URL"] = f"sqlite:///{_DB_PATH}"
 os.environ["KAPSO_API_KEY"] = "test-kapso-api-key"
 os.environ["KAPSO_PHONE_NUMBER_ID"] = "000000000000"
 os.environ["KAPSO_WEBHOOK_SECRET"] = "test-webhook-secret"
+os.environ["META_PHONE_NUMBER_ID"] = "000000000000"
+os.environ["META_ACCESS_TOKEN"] = "test-meta-access-token"
+os.environ["META_APP_SECRET"] = "test-app-secret"
+os.environ["META_VERIFY_TOKEN"] = "test-verify-token"
+os.environ["META_API_VERSION"] = "v23.0"
 os.environ["DEBUG"] = "false"
 os.environ["PROVEEDOR_IA"] = "fijo"
 os.environ["MODELO"] = "modelo-de-test"
@@ -36,7 +41,7 @@ from fastapi.testclient import TestClient
 
 from app import models
 from app.db import SessionLocal, init_db
-from app.main import app, kapso_client
+from app.main import app, meta_client
 
 TELEFONO_DE_PRUEBA = "5492995551234"
 
@@ -71,20 +76,20 @@ def db():
 
 
 @pytest.fixture
-def kapso_enviados(monkeypatch):
+def meta_enviados(monkeypatch):
     """Reemplaza el envío real por uno que solo registra qué se mandó. Los
-    tests no deben pegarle a la API real de Kapso."""
+    tests no deben pegarle a la API real de Meta."""
     enviados = []
 
     def envio_falso(telefono: str, texto: str) -> dict:
         enviados.append((telefono, texto))
         return {"messages": [{"id": "wamid.falso"}]}
 
-    monkeypatch.setattr(kapso_client, "enviar_mensaje_texto", envio_falso)
+    monkeypatch.setattr(meta_client, "enviar_mensaje_texto", envio_falso)
     return enviados
 
 
 @pytest.fixture
-def client(kapso_enviados):
+def client(meta_enviados):
     with TestClient(app) as test_client:
         yield test_client

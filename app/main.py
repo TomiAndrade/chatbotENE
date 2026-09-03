@@ -1,11 +1,13 @@
 """FastAPI: endpoints /webhook y /health.
 
-Flujo de /webhook (ver spec-etapa1.md y spec-etapa2.md). El endpoint hace
-solo lo mínimo para poder contestar 200 enseguida:
+Flujo de POST /webhook (ver spec-etapa1.md, spec-etapa2.md y
+spec-meta-cloud-api.md). El endpoint hace solo lo mínimo para poder contestar
+200 enseguida:
 
-1. Verificar firma.
-2. Si el evento no es un mensaje entrante, ignorar.
-3. Extraer los datos del payload y encolar el procesamiento.
+1. Verificar firma (X-Hub-Signature-256, Meta).
+2. Si el evento no trae mensajes (p. ej. statuses[] de entrega), ignorar.
+3. Extraer los datos del payload y encolar el procesamiento, uno por cada
+   mensaje — un solo POST puede traer varios, de personas distintas.
 
 Todo lo que toca la base de datos o la red corre después, en la background
 task `procesar_mensaje_entrante`:
@@ -25,33 +27,40 @@ seguidos del mismo número se procesan en paralelo: el chequeo de modo_humano
 del paso 6 puede quedar viejo mientras el modelo piensa, así que se vuelve a
 leer de la base justo antes de enviar (ver `esta_en_modo_humano`).
 
-El webhook también atiende `whatsapp.message.sent` (ver
-spec-pausa-por-intervencion-humana.md): el número está en modo coexistencia,
-la secretaría responde desde la app de WhatsApp Business sobre el mismo
-número que usa el bot, y hay que enterarse cuando eso pasa para no escribir
-encima. `procesar_mensaje_saliente` filtra ese evento a los mensajes
-`direction=outbound, origin=business_app` — la combinación que solo puede
-mandar una persona desde la app, nunca el bot por API — y prende o reinicia
-la pausa por intervención manual. `motivo_pausa` (`MotivoPausa` en
-app/models.py) distingue esa pausa de un escalamiento del modelo: solo la
-manual expira, pasados `PAUSA_HUMANA_MINUTOS` desde `modo_humano_desde`; un
-escalamiento (`escalar_a_humano`) usa el mismo `modo_humano` pero no expira
-nunca, se desmarca a mano.
+Con Kapso el webhook también atendía `whatsapp.message.sent` (ver
+spec-pausa-por-intervencion-humana.md): el número estaba en modo
+coexistencia, la secretaría respondía desde la app de WhatsApp Business sobre
+el mismo número que usa el bot, y `procesar_mensaje_saliente` filtraba ese
+evento a los mensajes `direction=outbound, origin=business_app` — la
+combinación que solo podía mandar una persona desde la app, nunca el bot por
+API — para prender o reiniciar la pausa por intervención manual.
+`motivo_pausa` (`MotivoPausa` en app/models.py) distingue esa pausa de un
+escalamiento del modelo: solo la manual expira, pasados
+`PAUSA_HUMANA_MINUTOS` desde `modo_humano_desde`; un escalamiento
+(`escalar_a_humano`) usa el mismo `modo_humano` pero no expira nunca, se
+desmarca a mano.
+
+**Con la Cloud API de Meta ese disparador no existe** (spec-meta-cloud-api.md,
+sección 5): no hay app de negocio, los mensajes salen por API o no salen.
+`procesar_mensaje_saliente` y `registrar_intervencion_humana` quedan
+dormidos, no eliminados — POST /webhook ya no los llama, pero el código y sus
+tests siguen ahí por si más adelante Meta habilita Coexistence.
 """
 
 import json
 import logging
 from datetime import datetime, timedelta, timezone
 
-from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Query, Request
+from fastapi.responses import PlainTextResponse
 from sqlalchemy.exc import IntegrityError
 
 from app import mensajes
 from app.config import config
 from app.db import SessionLocal, init_db
 from app.historial import construir_historial
-from app.kapso import KapsoClient, verificar_firma_webhook
 from app.limite import mensajes_ultima_hora
+from app.meta import MetaClient, verificar_challenge, verificar_firma_webhook
 from app.models import CANAL_WHATSAPP, Conversacion, Mensaje, MotivoPausa, RolMensaje
 from app.respuesta import ErrorTransitorioProveedor, generar_respuesta
 
@@ -62,10 +71,7 @@ logging.basicConfig(
 logger = logging.getLogger("bot")
 
 app = FastAPI(title="Bot WhatsApp ENE IA LAB")
-kapso_client = KapsoClient()
-
-EVENTO_MENSAJE_RECIBIDO = "whatsapp.message.received"
-EVENTO_MENSAJE_ENVIADO = "whatsapp.message.sent"
+meta_client = MetaClient()
 
 
 @app.on_event("startup")
@@ -75,7 +81,7 @@ def al_iniciar() -> None:
 
 @app.on_event("shutdown")
 def al_apagar() -> None:
-    kapso_client.cerrar()
+    meta_client.cerrar()
 
 
 def enmascarar_identificador(identificador: str) -> str:
@@ -181,7 +187,7 @@ def enviar_y_guardar(
     texto: str,
     aunque_este_en_modo_humano: bool = False,
 ) -> bool:
-    """Envía un texto por Kapso y, si se pudo mandar, lo guarda como mensaje
+    """Envía un texto por la Cloud API de Meta y, si se pudo mandar, lo guarda como mensaje
     del bot. Se usa tanto para la respuesta del modelo como para los avisos
     de escalamiento, límite y error: todos son mensajes "del bot" a efectos
     del historial.
@@ -193,7 +199,7 @@ def enviar_y_guardar(
     `aunque_este_en_modo_humano=True`.
 
     Devuelve True si el mensaje salió; False si se descartó por modo_humano o
-    si Kapso lo rechazó.
+    si Meta lo rechazó.
     """
     identificador_externo = conversacion.identificador_externo
 
@@ -206,7 +212,7 @@ def enviar_y_guardar(
         return False
 
     try:
-        kapso_client.enviar_mensaje_texto(identificador_externo, texto)
+        meta_client.enviar_mensaje_texto(identificador_externo, texto)
     except Exception:
         logger.exception("No se pudo enviar un mensaje a %s", enmascarar_identificador(identificador_externo))
         return False
@@ -340,7 +346,18 @@ def procesar_mensaje_entrante(identificador_externo: str, wa_message_id: str, co
 
     El webhook solo atiende WhatsApp por ahora, así que el canal queda
     hardcodeado acá; cuando exista otro canal, esta función pasa a recibirlo
-    como parámetro en vez de asumirlo."""
+    como parámetro en vez de asumirlo.
+
+    El `except Exception` de más abajo (además del `except IntegrityError`
+    puntual del commit) es a propósito: Starlette corre las background tasks
+    después de haber mandado la respuesta HTTP (`Response.__call__` hace
+    `send` del 200 y recién después `await background()`), así que para
+    cuando algo revienta acá ya no hay respuesta que cambiar. Sin este catch,
+    una excepción cualquiera se escapa de esta función, no pasa por
+    `logger("bot")`, y termina en el logger de uvicorn — sin
+    `identificador_externo` ni `wa_message_id`, y sin que quede registrado
+    como el error de negocio que es. El mensaje del usuario se pierde en
+    silencio: Meta ya recibió el 200 y no reintenta."""
     db = SessionLocal()
     try:
         ya_existe = db.query(Mensaje).filter_by(wa_message_id=wa_message_id).first()
@@ -396,6 +413,11 @@ def procesar_mensaje_entrante(identificador_externo: str, wa_message_id: str, co
             return
 
         responder(db, conversacion, mensaje_usuario)
+    except Exception:
+        logger.error(
+            "Error inesperado procesando el mensaje de %s (wa_message_id=%s)",
+            enmascarar_identificador(identificador_externo), wa_message_id, exc_info=True,
+        )
     finally:
         db.close()
 
@@ -476,79 +498,115 @@ def procesar_mensaje_saliente(identificador_externo: str, wa_message_id: str, co
 
 
 def _extraer_contenido(mensaje: dict) -> str:
-    """Traduce `message.type`/`message.text.body` del payload de Kapso al
-    texto a guardar. Comparte esta lógica el mensaje entrante y el saliente
-    de la secretaría: los dos pueden venir con tipos no soportados (una
-    imagen, un audio)."""
+    """Traduce `type`/`text.body` de un mensaje del payload de Meta (o del
+    payload aún con forma de Kapso que usa el saliente dormido) al texto a
+    guardar. Comparte esta lógica el mensaje entrante y el saliente de la
+    secretaría: los dos pueden venir con tipos no soportados (una imagen, un
+    audio)."""
     tipo = mensaje.get("type")
     if tipo == "text":
         return mensaje.get("text", {}).get("body", "")
     return f"[mensaje de tipo '{tipo}' no soportado en esta etapa]"
 
 
+@app.get("/webhook")
+def verificar_webhook(
+    hub_mode: str | None = Query(default=None, alias="hub.mode"),
+    hub_verify_token: str | None = Query(default=None, alias="hub.verify_token"),
+    hub_challenge: str | None = Query(default=None, alias="hub.challenge"),
+):
+    """Meta valida la URL del webhook con este GET antes de empezar a mandar
+    eventos (spec-meta-cloud-api.md, sección 1). Si el modo y el verify token
+    coinciden con lo configurado, hay que devolver `hub.challenge` tal cual,
+    como texto plano — ni JSON ni comillas."""
+    if verificar_challenge(hub_mode, hub_verify_token):
+        return PlainTextResponse(hub_challenge or "")
+    logger.warning("Verificación de webhook con verify token inválido")
+    raise HTTPException(status_code=403, detail="Verify token inválido")
+
+
 @app.post("/webhook")
 async def recibir_webhook(
     request: Request,
     background_tasks: BackgroundTasks,
-    x_webhook_signature: str | None = Header(default=None),
-    x_webhook_event: str | None = Header(default=None),
+    x_hub_signature_256: str | None = Header(default=None),
 ):
+    """Meta no manda un header de tipo de evento: hay que inspeccionar la
+    estructura del payload (spec-meta-cloud-api.md, sección 2). Siempre
+    devuelve 200 salvo firma inválida — un 4xx/5xx hace que Meta reintente y,
+    si se repite, que desuscriba el webhook."""
     # La firma se calcula sobre el body crudo, por eso hay que leerlo antes
     # de que algo lo parsee como JSON. Es el único punto async del archivo.
     cuerpo_crudo = await request.body()
 
-    if not verificar_firma_webhook(cuerpo_crudo, x_webhook_signature):
+    if not verificar_firma_webhook(cuerpo_crudo, x_hub_signature_256):
         logger.warning("Firma de webhook inválida, se descarta la request")
         raise HTTPException(status_code=401, detail="Firma inválida")
 
-    if x_webhook_event == EVENTO_MENSAJE_RECIBIDO:
+    try:
         payload = json.loads(cuerpo_crudo)
-        mensaje = payload.get("message", {})
-        conversacion_payload = payload.get("conversation", {})
+    except json.JSONDecodeError:
+        logger.warning("Body de webhook no es JSON válido, se ignora: %s", _cuerpo_para_loguear(cuerpo_crudo))
+        return {"status": "ok"}
 
+    try:
+        for entry in payload.get("entry", []):
+            for cambio in entry.get("changes", []):
+                _procesar_cambio(cambio.get("value") or {}, background_tasks)
+    except (AttributeError, TypeError, KeyError) as error:
+        # El payload no tiene la forma que esperamos (un campo del tipo que
+        # no es, algo donde iba una lista, etc.) — no es un bug propio, es
+        # un payload que no anticipamos. 200 igual: un 4xx/5xx hace que Meta
+        # reintente y, si se repite, que desuscriba el webhook.
+        logger.warning(
+            "Payload de webhook con estructura inesperada (%s: %s), se ignora: %s",
+            type(error).__name__, error, _cuerpo_para_loguear(cuerpo_crudo),
+        )
+    except Exception:
+        # Cualquier otra excepción es sospechosa de ser un bug propio del
+        # procesamiento, no un problema del payload. Sin este log a nivel
+        # ERROR con traceback, un bug acá se traga el mensaje en silencio:
+        # Meta ya recibió el 200 y no reintenta.
+        logger.error(
+            "Error inesperado procesando el webhook, se ignora igual. Payload: %s",
+            _cuerpo_para_loguear(cuerpo_crudo), exc_info=True,
+        )
+
+    return {"status": "ok"}
+
+
+def _cuerpo_para_loguear(cuerpo_crudo: bytes, limite: int = 2000) -> str:
+    """El body crudo del webhook, recortado para no inundar el log con un
+    payload gigante (por ejemplo uno con muchos mensajes en el mismo entry)."""
+    texto = cuerpo_crudo.decode("utf-8", errors="replace")
+    if len(texto) > limite:
+        return texto[:limite] + f"... ({len(texto)} caracteres en total)"
+    return texto
+
+
+def _procesar_cambio(value: dict, background_tasks: BackgroundTasks) -> None:
+    """Un `changes[].value` del payload de Meta. Si no trae `messages`, es un
+    evento de otro tipo (típicamente `statuses[]`, la confirmación de
+    entrega) y no hay nada que hacer: se ignora explícitamente, no por
+    descarte (spec-meta-cloud-api.md, sección 2)."""
+    mensajes_entrantes = value.get("messages")
+    if not mensajes_entrantes:
+        logger.debug("Cambio de webhook sin messages (statuses u otro evento), se ignora: %s", value)
+        return
+
+    for mensaje in mensajes_entrantes:
         wa_message_id = mensaje.get("id")
-        identificador_externo = mensaje.get("from") or conversacion_payload.get("phone_number")
+        # `from` va tal cual llega, sin normalizar (spec-meta-cloud-api.md,
+        # sección 3): el "9" de los números argentinos puede estar o no, y
+        # tocarlo rompe la búsqueda de conversación o el envío.
+        identificador_externo = mensaje.get("from")
         contenido = _extraer_contenido(mensaje)
 
         if not identificador_externo or not wa_message_id:
-            logger.warning("Payload de webhook incompleto, se descarta: %s", payload)
-            return {"status": "payload incompleto"}
+            logger.warning("Mensaje de webhook incompleto, se descarta: %s", mensaje)
+            continue
 
         background_tasks.add_task(procesar_mensaje_entrante, identificador_externo, wa_message_id, contenido)
-        return {"status": "ok"}
-
-    if x_webhook_event == EVENTO_MENSAJE_ENVIADO:
-        payload = json.loads(cuerpo_crudo)
-        mensaje = payload.get("message", {})
-        conversacion_payload = payload.get("conversation", {})
-        kapso_info = mensaje.get("kapso") or {}
-
-        # Requisito crítico (spec-pausa-por-intervencion-humana.md, sección
-        # 3): chequeo explícito y positivo de los dos valores exactos, nunca
-        # "si no es del bot, es humano". Si el bot manda un mensaje y ese
-        # evento vuelve por acá como outbound+cloud_api, o si origin viene
-        # ausente o con cualquier valor que no sea justo "business_app", no
-        # se pausa — el bot no puede pausarse a sí mismo.
-        if kapso_info.get("direction") != "outbound" or kapso_info.get("origin") != "business_app":
-            logger.debug(
-                "Evento %s ignorado (direction=%s, origin=%s)",
-                x_webhook_event, kapso_info.get("direction"), kapso_info.get("origin"),
-            )
-            return {"status": "evento ignorado"}
-
-        wa_message_id = mensaje.get("id")
-        identificador_externo = mensaje.get("to") or conversacion_payload.get("phone_number")
-        contenido = _extraer_contenido(mensaje)
-
-        if not identificador_externo or not wa_message_id:
-            logger.warning("Payload de whatsapp.message.sent incompleto, se descarta: %s", payload)
-            return {"status": "payload incompleto"}
-
-        background_tasks.add_task(procesar_mensaje_saliente, identificador_externo, wa_message_id, contenido)
-        return {"status": "ok"}
-
-    logger.debug("Evento de webhook ignorado: %s", x_webhook_event)
-    return {"status": "evento ignorado"}
 
 
 @app.get("/health")
