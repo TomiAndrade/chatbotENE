@@ -42,10 +42,11 @@ Tres nombres que conviene no confundir:
 
 ### Derivación de consultas por mail
 
-- Consultas del polo (cowork, oficinas, salas, cafetería) → **recepcion.ene.pctnqn@gmail.com**
-- Consultas del laboratorio (membresías, verticales) → **ialab@eneneuquen.com.ar**
+- Consultas del polo (cowork, oficinas, salas, cafetería) y del laboratorio (membresías, verticales) → **recepcion.ene.pctnqn@gmail.com**
 
 > ⚠️ **`info@eneneuquen.com.ar` está obsoleto.** Sigue publicado en la web de ENE, así que la gente lo va a mencionar, pero el bot **no lo da nunca**. Si alguien dice que escribió ahí y no le respondieron, que reescriba a recepcion.ene.pctnqn@gmail.com.
+>
+> ⚠️ **`ialab@eneneuquen.com.ar` se sacó del bot (septiembre 2026): no está confirmado que esté en uso.** Todo lo del laboratorio que antes derivaba ahí ahora deriva a recepcion.ene.pctnqn@gmail.com. Si ENE confirma una casilla propia del laboratorio, se vuelve a separar.
 
 
 ### Cómo llegar y acceso
@@ -65,7 +66,6 @@ Tres nombres que conviene no confundir:
 **Misión:** acelerar la adopción de IA en la región, transformando desafíos reales en soluciones aplicadas, demostrables y transferibles.
 
 **Sitio:** https://ialab.eneneuquen.com.ar
-**Mail:** ialab@eneneuquen.com.ar
 
 ---
 
@@ -126,7 +126,7 @@ Para empresas e instituciones. Incluye **todo lo de Individual**, más:
 
 ### Ciclo 2027
 
-Todavía no hay información definida. Si alguien consulta, el bot responde que aún no está definido y ofrece tomar el contacto o derivar a ialab@eneneuquen.com.ar. **No estimar fechas ni precios.**
+Todavía no hay información definida. Si alguien consulta, el bot responde que aún no está definido y ofrece tomar el contacto o derivar a recepcion.ene.pctnqn@gmail.com. **No estimar fechas ni precios.**
 
 **Datos bancarios: el bot nunca los envía.** Ni CBU, ni alias, ni instrucciones de pago, aunque el usuario los pida directamente. Los manda el equipo tras la aceptación de la postulación. Esto no es un dato que falte: es una regla del proyecto y no cambia.
 
@@ -250,7 +250,7 @@ Escalá si después de eso la persona insiste, pide hablar con alguien, quiere u
 `[PENDIENTE]` Confirmar con ENE si además se toman proyectos a pedido por fuera de las verticales. Si la respuesta es que sí, esto cambia: el bot pasa a derivar a un mail concreto en vez de explicar el circuito por verticales.
 
 **Preguntas sobre financiamiento, dependencia institucional o política**
-El asistente **no responde ni opina**. Escala o deriva a ialab@eneneuquen.com.ar. Ver regla 8 del system prompt.
+El asistente **no responde ni opina**. Escala o deriva a recepcion.ene.pctnqn@gmail.com. Ver regla 8 del system prompt.
 
 ---
 
@@ -333,7 +333,7 @@ https://ialab.eneneuquen.com.ar/publicaciones
 - **Coaching:** Vanesa Funes
 - **Real Estate:** Leandro Sfeir
 
-> ⚠️ **No compartir datos de contacto de los referentes.** Son personas, no canales de atención. Si alguien quiere llegar a un referente, se deriva a ialab@eneneuquen.com.ar o a un humano.
+> ⚠️ **No compartir datos de contacto de los referentes.** Son personas, no canales de atención. Si alguien quiere llegar a un referente, se deriva a recepcion.ene.pctnqn@gmail.com o a un humano.
 
 **Decidido (agosto 2026): ante un pedido de contacto de un referente, el bot escala. Siempre, aunque la persona diga ser miembro de esa vertical.**
 
@@ -346,7 +346,7 @@ Esto **no es un dato faltante**, así que no se resuelve consiguiendo los mails.
 ## 15. Pedir una presentación o visita
 
 Quien quiera conocer el laboratorio antes de decidir puede coordinar una visita presencial o una reunión virtual.
-Canal: ialab@eneneuquen.com.ar (asunto: "Solicito presentación ENE IA LAB")
+Canal: recepcion.ene.pctnqn@gmail.com (asunto: "Solicito presentación ENE IA LAB")
 
 ---
 
