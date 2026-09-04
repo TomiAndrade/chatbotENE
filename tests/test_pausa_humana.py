@@ -51,6 +51,21 @@ def _conversacion_de_prueba() -> Conversacion:
         db.close()
 
 
+def _a_utc(instante: datetime) -> datetime:
+    """Normaliza a UTC un datetime leído de la base, sin asumir el motor.
+
+    SQLite devuelve `modo_humano_desde` naive (ver el docstring de
+    `_pausa_vigente` en app/main.py) representando un valor que ya está en
+    UTC — `.replace(tzinfo=utc)` sólo le pone la etiqueta. Postgres lo
+    devuelve aware, y ahí hace falta `.astimezone(utc)` para convertir de
+    verdad. Mezclar los dos casos importa: `.astimezone()` sobre un naive
+    asume que representa la hora *local del sistema*, no UTC — en un test
+    corriendo en Argentina (UTC-3) eso corre el valor 3 horas."""
+    if instante.tzinfo is None:
+        return instante.replace(tzinfo=timezone.utc)
+    return instante.astimezone(timezone.utc)
+
+
 # --- procesar_mensaje_saliente, llamado directo (dormido bajo Cloud API) ---
 
 
@@ -157,7 +172,7 @@ def test_ventana_se_reinicia_con_cada_mensaje_de_la_secretaria(client, meta_envi
     main_mod.procesar_mensaje_saliente(TELEFONO_DE_PRUEBA, "wamid.secretaria2", "segundo mensaje de la secretaria")
 
     conversacion = _conversacion_de_prueba()
-    minutos_desde_ahora = (datetime.now(timezone.utc) - conversacion.modo_humano_desde.replace(tzinfo=timezone.utc))
+    minutos_desde_ahora = (datetime.now(timezone.utc) - _a_utc(conversacion.modo_humano_desde))
     assert minutos_desde_ahora < timedelta(minutes=1)
 
 
@@ -178,7 +193,7 @@ def test_reintento_del_mismo_evento_no_reinicia_la_ventana(client, meta_enviados
     main_mod.procesar_mensaje_saliente(TELEFONO_DE_PRUEBA, "wamid.secretaria-dup", "ya te ayudo")  # mismo wa_message_id
 
     conversacion = _conversacion_de_prueba()
-    assert conversacion.modo_humano_desde.replace(tzinfo=timezone.utc) == vieja
+    assert _a_utc(conversacion.modo_humano_desde) == vieja
 
 
 # --- Interacción con el escalamiento del modelo (sección 8 del spec) -------
@@ -206,7 +221,7 @@ def test_secretaria_responde_una_conversacion_ya_escalada_no_le_pone_expiracion(
     conversacion = _conversacion_de_prueba()
     assert conversacion.modo_humano is True
     assert conversacion.motivo_pausa == MotivoPausa.ESCALAMIENTO
-    assert conversacion.modo_humano_desde.replace(tzinfo=timezone.utc) == fecha_del_escalamiento
+    assert _a_utc(conversacion.modo_humano_desde) == fecha_del_escalamiento
     assert conversacion.resumen_escalamiento == "ya escaló el modelo"
 
 
@@ -241,7 +256,7 @@ def test_escalar_a_humano_no_se_pierde_si_habia_una_pausa_manual_vencida(client,
     conversacion = _conversacion_de_prueba()
     assert conversacion.modo_humano is True
     assert conversacion.motivo_pausa == MotivoPausa.ESCALAMIENTO
-    assert conversacion.modo_humano_desde.replace(tzinfo=timezone.utc) >= antes_de_escalar
+    assert _a_utc(conversacion.modo_humano_desde) >= antes_de_escalar
     assert conversacion.resumen_escalamiento == "ahora escala el modelo"
 
 
