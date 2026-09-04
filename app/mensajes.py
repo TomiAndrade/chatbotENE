@@ -5,17 +5,22 @@ escalamiento").
 
 from datetime import datetime
 
-HORARIO_ATENCION_DESDE = 9
-HORARIO_ATENCION_HASTA = 17
+HORARIO_ATENCION_DESDE = 8
+HORARIO_ATENCION_HASTA = 18
 DIAS_HABILES = range(0, 5)  # lunes=0 ... domingo=6, según datetime.weekday()
 
 MENSAJE_ESCALAMIENTO_EN_HORARIO = (
     "Tu consulta pasó a una persona del equipo, en breve te responden por acá."
 )
 
+# El horario se interpola desde las constantes a propósito: cuando estaba
+# escrito a mano el texto siguió diciendo "de 9 a 17" después de que el
+# horario real pasara a 8-18, y el bot terminó contradiciéndose solo (decía
+# un horario si se lo preguntaban y otro al escalar).
 MENSAJE_ESCALAMIENTO_FUERA_DE_HORARIO = (
     "Tu consulta quedó registrada. Nuestro horario de atención es de lunes a "
-    "viernes de 9 a 17, y en ese horario te responde una persona del equipo."
+    f"viernes de {HORARIO_ATENCION_DESDE} a {HORARIO_ATENCION_HASTA}, y en ese "
+    "horario te responde una persona del equipo."
 )
 
 MENSAJE_LIMITE_ALCANZADO = (
@@ -26,6 +31,10 @@ MENSAJE_LIMITE_ALCANZADO = (
 MENSAJE_ERROR_GENERICO = (
     "Perdón, tuvimos un problema para responderte. Ya avisamos a una persona "
     "del equipo para que te contacte."
+)
+
+MENSAJE_ERROR_TRANSITORIO = (
+    "Perdón, tuvimos un problema técnico. Probá de nuevo en un momento."
 )
 
 

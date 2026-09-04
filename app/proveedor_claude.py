@@ -9,6 +9,8 @@ Referencias consultadas (docs.anthropic.com, redirige a platform.claude.com):
   bloque que se quiere cachear.
 """
 
+import logging
+
 import anthropic
 
 from app.config import config
@@ -25,15 +27,23 @@ from app.respuesta import (
     con_un_reintento,
 )
 
+logger = logging.getLogger("proveedor_claude")
+
 MAX_TOKENS_RESPUESTA = 1024
 
-_HERRAMIENTAS = [
-    {
-        "name": NOMBRE_HERRAMIENTA_ESCALAR,
-        "description": DESCRIPCION_HERRAMIENTA_ESCALAR,
-        "input_schema": PARAMETROS_HERRAMIENTA_ESCALAR,
-    }
-]
+
+def _herramientas() -> list[dict]:
+    """Vacía si ESCALAMIENTO_HABILITADO=false (ver specs/spec-derivacion.md):
+    sin bandeja de entrada, no hay quién reciba un escalamiento."""
+    if not config.escalamiento_habilitado:
+        return []
+    return [
+        {
+            "name": NOMBRE_HERRAMIENTA_ESCALAR,
+            "description": DESCRIPCION_HERRAMIENTA_ESCALAR,
+            "input_schema": PARAMETROS_HERRAMIENTA_ESCALAR,
+        }
+    ]
 
 
 class ProveedorClaude(ProveedorRespuesta):
@@ -61,7 +71,7 @@ class ProveedorClaude(ProveedorRespuesta):
                         "cache_control": {"type": "ephemeral"},
                     }
                 ],
-                tools=_HERRAMIENTAS,
+                tools=_herramientas(),
                 messages=mensajes,
             )
         )
@@ -87,6 +97,11 @@ def _interpretar_respuesta(respuesta) -> RespuestaGenerada:
         if bloque.type == "text" and bloque.text:
             texto = (texto or "") + bloque.text
         elif bloque.type == "tool_use" and bloque.name == NOMBRE_HERRAMIENTA_ESCALAR:
+            if not config.escalamiento_habilitado:
+                logger.warning(
+                    "El modelo llamó a escalar_a_humano con ESCALAMIENTO_HABILITADO=false; se ignora."
+                )
+                continue
             escalar = True
             resumen = bloque.input.get("resumen")
 

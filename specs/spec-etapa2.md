@@ -39,26 +39,31 @@ Donde `RespuestaGenerada` es un dataclass con:
 
 Esta firma es la que va a durar. La implementación de adentro puede cambiar de proveedor sin afectar al resto.
 
-Mantener la selección por `PROVEEDOR_IA`. Implementaciones: `fijo` (la actual, se conserva para tests), `claude`, `gemini`.
+Mantener la selección por `PROVEEDOR_IA`. Implementaciones: `fijo` (la actual, se conserva para tests), `openai_compat`, `claude`.
 
 ---
 
 ## Proveedores
 
-El proyecto debe poder correr con Gemini durante el desarrollo (free tier, sin tarjeta) y con Claude en producción. Ambas implementaciones detrás de la misma firma.
+El proyecto debe poder correr durante el desarrollo contra un endpoint gratuito o barato, y con Claude en producción. Ambas implementaciones detrás de la misma firma.
+
+`openai_compat` no es un proveedor concreto: es **un solo proveedor parametrizado por `BASE_URL`**, que sirve para cualquier endpoint con formato de la API de OpenAI (chat completions + tool calling en ese formato). Eso incluye OpenRouter, DeepSeek, el endpoint gratuito de NVIDIA, o un modelo corriendo local — todos hablan el mismo formato de request/response. No atarlo a un servicio concreto ni en el nombre ni en el código; el servicio que se use hoy puede cambiar mañana sin tocar la implementación, solo la env var.
 
 Configuración por variables de entorno:
 
 ```
-PROVEEDOR_IA=gemini
-MODELO=gemini-2.0-flash
+PROVEEDOR_IA=openai_compat
+BASE_URL=https://openrouter.ai/api/v1
+MODELO=nvidia/nemotron-3-ultra-550b-a55b:free
 ANTHROPIC_API_KEY=
-GEMINI_API_KEY=
+OPENAI_COMPAT_API_KEY=
 ```
 
-El modelo se define por env var, no hardcodeado. En producción se prevé usar un modelo chico y rápido (Haiku), no el más grande.
+Esos son los valores de desarrollo actuales. `OPENAI_COMPAT_API_KEY` se llama así, genérico, a propósito: rotar de proveedor (OpenRouter → DeepSeek → lo que sea) es cambiar `BASE_URL`, `MODELO` y esta clave, sin renombrar nada en el código.
 
-**Importante:** las dos APIs tienen formatos distintos de tool calling. La traducción entre el formato propio de cada proveedor y `RespuestaGenerada` vive dentro de cada implementación, no afuera.
+El modelo se define por env var, no hardcodeado. En producción se prevé usar Claude con un modelo chico y rápido (Haiku), no el más grande.
+
+**Importante:** el formato OpenAI (`openai_compat`) y el formato nativo de Anthropic (`claude`) manejan tool calling distinto. La traducción entre el formato propio de cada proveedor y `RespuestaGenerada` vive dentro de cada implementación, no afuera.
 
 Consultar la documentación oficial de cada API antes de implementar. No asumir la forma del payload.
 
@@ -85,6 +90,8 @@ Se arma una sola vez al arrancar: se lee `system-prompt.md` y se reemplaza `{{KN
 
 Si el proveedor soporta **caché de prompt**, activarlo para el bloque de sistema. Es fijo en todas las llamadas y reduce costo y latencia de forma significativa.
 
+En `openai_compat` esto depende del proveedor detrás de `BASE_URL` (algunos cachean automático, otros no exponen el control) y queda opcional, sin bloquear la implementación. En `claude` va explícito, con `cache_control` sobre el bloque de sistema.
+
 ---
 
 ## Herramienta `escalar_a_humano`
@@ -105,6 +112,8 @@ Cuando el modelo la llama, el servidor debe:
 **No implementar el bucle completo de tool calling.** Si el modelo llama a la herramienta, se corta ahí: no se le devuelve el resultado para que siga generando. El mensaje al usuario lo escribe el código. Esto simplifica mucho y no se pierde nada.
 
 Si el modelo devuelve texto **y además** llama a la herramienta, enviar ambos: primero su texto, después el aviso de escalamiento.
+
+**Diferencia de formato al leer el argumento:** en formato OpenAI (`openai_compat`), `function.arguments` llega como **string con JSON adentro**, no como objeto — requiere `json.loads` del lado de la implementación. Si el tool call llegó pero el parseo falla (o parsea pero no trae `resumen`), **escalar igual** (`escalar=True`, `resumen=None`): un `JSONDecodeError` no puede tumbar el request. Perder el resumen es peor para quien atienda, pero perder el escalamiento en sí es peor todavía.
 
 ---
 
@@ -130,9 +139,13 @@ Si la llamada al modelo falla (timeout, rate limit, error de la API):
 2. Enviar un mensaje de disculpa genérico e **inmediatamente escalar** a humano. Una conversación en manos de una persona es mejor que una conversación muerta.
 3. Loguear el error completo.
 
-Timeout de la llamada al modelo: **20 segundos**. Si tarda más, en WhatsApp ya se percibe como caído.
+Timeout de la llamada al modelo: **20 segundos en total, no por intento**. Si tarda más, en WhatsApp ya se percibe como caído — y lo que percibe el usuario es la espera completa, así que el presupuesto se reparte entre los intentos: con un reintento, 10 segundos cada uno.
 
 No reintentar más de una vez. Un reintento largo empeora la experiencia más de lo que la salva.
+
+**Un proveedor OpenAI-compatible puede devolver el error adentro de un HTTP 200.** No todos los fallos llegan como excepción: un `200 OK` con body `{"error": {...}}` es un fallo igual, y hay que detectarlo explícitamente chequeando la clave `error` en el body de la respuesta. Si no se detecta, el parseo no encuentra `choices` y el fallo termina tratado como respuesta vacía en vez de como error — que es el camino equivocado (ver el punto 7 de más abajo sobre respuesta vacía). El chequeo va sobre el contenido del body, no sobre el código HTTP.
+
+**Distinguir el error transitorio del proveedor del resto de los fallos.** En desarrollo, contra un free tier, los errores transitorios (saturación del proveedor, 5xx, rate limit momentáneo) son frecuentes y no deberían tumbar la conversación en `modo_humano` cada vez: conviene responder algo como "hubo un problema técnico, probá de nuevo" y **no** escalar. En producción, con un proveedor pago, la regla no cambia: sigue escalando como está especificado arriba. Este comportamiento se controla por `DEBUG` (o una env var equivalente si conviene separarla) — no es una regla nueva que reemplaza la anterior, es una distinción que solo aplica mientras se desarrolla.
 
 ---
 
@@ -156,19 +169,28 @@ Es una defensa simple contra un bucle accidental o alguien probando el bot a pro
 ## Variables de entorno nuevas
 
 ```
-PROVEEDOR_IA=gemini
-MODELO=gemini-2.0-flash
+PROVEEDOR_IA=openai_compat
+BASE_URL=https://openrouter.ai/api/v1
+MODELO=nvidia/nemotron-3-ultra-550b-a55b:free
 ANTHROPIC_API_KEY=
-GEMINI_API_KEY=
+OPENAI_COMPAT_API_KEY=
 TIMEZONE=America/Argentina/Buenos_Aires
 HISTORIAL_MAX_MENSAJES=20
 HISTORIAL_DIAS_VALIDEZ=7
 LIMITE_MENSAJES_HORA=30
 ```
 
-Agregarlas al `.env.example` con valores vacíos donde sean claves.
+Esos son los valores de desarrollo actuales para `PROVEEDOR_IA`, `BASE_URL` y `MODELO`. Agregarlas al `.env.example`, con valores vacíos donde sean claves.
 
 **Recordatorio de la etapa 1:** ninguna clave hardcodeada, `.env` en `.gitignore`.
+
+---
+
+## Entregable: script de reset de `modo_humano`
+
+Un script (por número de teléfono) que desmarque `modo_humano` en la conversación correspondiente. Hoy ese desmarcado se hace a mano en la base; con un proveedor gratuito con tasa de error alta en desarrollo, va a hacer falta seguido.
+
+Es **prerequisito** para poder correr los criterios de aceptación 5, 6 y 7: el criterio 4 (el bot deja de responder tras escalar) corta la conversación, y sin una forma de revertir `modo_humano` no se puede seguir probando los criterios siguientes sobre la misma conversación.
 
 ---
 
@@ -189,16 +211,20 @@ Los tests **no deben pegarle a la API real**. Mockear el proveedor.
 
 ## Criterio de aceptación
 
-1. Se escribe "hola" y el bot se presenta como asistente de ENE.
+> **Revisados en agosto de 2026**, tras la ronda de datos de ENE que llenó la sección 11 del knowledge base. Los criterios 3 y 7 estaban escritos para un bot que no tenía precios de espacios y hoy los tiene: el 3 pedía escalar ante cualquier consulta de alquiler, y el 7 daba por buena la respuesta si el bot **no** decía el precio de una oficina —cosa que ahora sabe—. Tal como estaban, los dos se aprobaban con el comportamiento equivocado.
+
+1. Se escribe "hola" y el bot se presenta como asistente de ENE. **No** como asistente del IA LAB.
 2. Se pregunta el precio de la membresía individual y responde $85.000, corto y sin markdown.
-3. Se pregunta por alquiler de una sala y **escala**: `modo_humano` queda en `true`, con resumen guardado, y llega el aviso correspondiente al horario.
+3. Alquiler de espacios, que ahora son dos comportamientos distintos:
+   1. Se pregunta cuánto sale la sala de reuniones y **responde** USD 100 la jornada completa, hasta 16 personas, + IVA. **No escala.**
+   2. Se pide reservarla para una fecha concreta y ahí sí **escala**: `modo_humano` queda en `true`, con resumen guardado, y llega el aviso correspondiente al horario.
 4. A partir de ahí el bot **no responde más** en esa conversación.
 5. Se pregunta una receta de cocina y redirige sin escalar.
-6. Se pregunta algo relacionado pero ausente del knowledge base (por ejemplo, si hay bicicletero) y **escala** en vez de rechazar.
-7. Se pregunta el precio de una oficina y **no inventa** un número.
+6. Se pregunta algo relacionado pero ausente del knowledge base y **escala** en vez de rechazar. Elegir el ejemplo contra el KB del día: creció bastante y varios de los huecos viejos ya no lo son. Sirve preguntar si hay bicicletero, o si la sala de podcast tiene tratamiento acústico.
+7. Se pregunta cuánto sale un seat **por día** —el único valor de la sección 11 que figura como CONSULTAR— y **no inventa** un número: ni lo estima ni lo deduce del seat mensual ni de la oficina por día, que sí tienen precio al lado en la misma tabla.
 8. Los tests pasan.
 
-El punto 6 es el que más suele fallar. Si el bot lo rechaza como fuera de tema, el problema está en el prompt, no en el código.
+El punto 6 es el que más suele fallar. Si el bot lo rechaza como fuera de tema, el problema está en el prompt, no en el código. El 7 es el nuevo candidato a fallar: tener precios cerca del hueco invita a interpolar mucho más que no tener ninguno.
 
 ---
 

@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.config import config
 from app.models import Conversacion, Mensaje, RolMensaje
 
-PREFIJO_HUMANO = "[Respuesta de una persona del equipo] "
+MARCADOR_HUMANO = "[una persona del equipo respondió]"
 
 
 def construir_historial(db: Session, conversacion: Conversacion, mensaje_actual: Mensaje) -> list[Mensaje]:
@@ -27,7 +27,12 @@ def construir_historial(db: Session, conversacion: Conversacion, mensaje_actual:
             Mensaje.conversacion_id == conversacion.id,
             Mensaje.id != mensaje_actual.id,
         )
-        .order_by(Mensaje.creado_en.desc())
+        # El id desempata: dos mensajes guardados en el mismo instante (el
+        # texto del modelo y el aviso de escalamiento salen uno detrás del
+        # otro) tienen que quedar en el orden en que se crearon, y no en uno
+        # arbitrario que además puede hacer que el limit descarte el que no
+        # corresponde.
+        .order_by(Mensaje.creado_en.desc(), Mensaje.id.desc())
         .limit(config.historial_max_mensajes)
         .all()
     )
@@ -50,11 +55,18 @@ def mapear_mensaje(mensaje: Mensaje) -> tuple[str, str]:
     proveedor. Rol lógico es "usuario" o "asistente" — el mapeo a los roles
     propios de cada API vive dentro de cada proveedor.
 
-    Los mensajes de rol `humano` viajan como asistente, pero con el texto
-    prefijado: son contexto válido, no ejemplos del estilo del bot.
+    Los mensajes de rol `humano` viajan como asistente, pero con un marcador
+    fijo en vez del texto real (MARCADOR_HUMANO): el modelo tiene que saber
+    que hubo una intervención humana, no leer qué se dijo. La secretaría
+    puede responder cosas que el bot nunca debe repetir — datos bancarios,
+    por ejemplo, que el circuito documentado en knowledge-base.md pone en
+    manos del equipo humano por WhatsApp — y antes de este cambio ese texto
+    entraba íntegro al contexto del modelo. El contenido real se sigue
+    guardando en la base tal cual (lo necesitan el inbox y el diagnóstico);
+    lo único que cambia es lo que ve el modelo.
     """
     if mensaje.rol == RolMensaje.USUARIO:
         return "usuario", mensaje.contenido
     if mensaje.rol == RolMensaje.HUMANO:
-        return "asistente", PREFIJO_HUMANO + mensaje.contenido
+        return "asistente", MARCADOR_HUMANO
     return "asistente", mensaje.contenido
