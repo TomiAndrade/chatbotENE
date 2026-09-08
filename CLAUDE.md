@@ -58,6 +58,16 @@ bot se guarda con `wa_message_id = None`**. Kapso devuelve el id en
 `messages[0].id` al enviar, y el campo del modelo existe justo para eso, pero
 todavía no se persiste.
 
+**Validación de configuración al arranque (spec-validacion-config-arranque.md):
+implementada.** `al_iniciar()` (`app/main.py`) llama a `validar_config()`
+antes de crear el engine de la base o aceptar requests; si falta o es
+incoherente, el proceso muere con código de salida distinto de cero y loguea
+qué falta, sin crear ningún archivo. Verificado contra un `uvicorn` real (no
+solo contra los tests): el camino de falla, exit code 3 incluido, y que
+`bot.db` queda intacto. El camino de éxito contra una base Postgres real
+(no local, no hay una a mano) no se probó — solo que la línea de resumen se
+loguea sin secretos y que llega a intentar conectar.
+
 **`PENDIENTES.md` tiene la lista completa de lo que falta**, ordenada por
 prioridad: la validación real de la etapa 2, los `[PENDIENTE]` del knowledge
 base a completar con el equipo, el checklist de deploy y la deuda técnica menor.
@@ -67,8 +77,14 @@ que hacen falta para entender el diseño.
 ## Stack
 
 - Python 3.11+, FastAPI, SQLAlchemy (ORM obligatorio, nada de SQL crudo)
-- SQLite en desarrollo, Postgres en producción — migrar es cambiar
-  `DATABASE_URL`, nada más
+- **Postgres en todos los entornos, incluido local — sin modo dev** (ver
+  spec-validacion-config-arranque.md). `DATABASE_URL` no tiene default y
+  `validar_config()` rechaza cualquier valor que no empiece con
+  `postgresql://`, SQLite incluido; corre en el startup real de la app
+  (`al_iniciar` en `app/main.py`), nunca al importar `app/config.py` — la
+  suite de tests sí sigue corriendo contra SQLite, pero no pasa por
+  `al_iniciar()` (ver `tests/conftest.py`, fixture `client`). El único
+  cambio para levantar contra otra base es la variable, sin tocar código.
 - httpx para las llamadas a Kapso y al proveedor `openai_compat`, python-dotenv
   para la config
 - ngrok para exponer el webhook en desarrollo (externo, no es parte del código)
@@ -285,17 +301,15 @@ más abajo, sin usarse.
 
 El deploy está fuera de alcance por ahora, pero esto hay que resolverlo antes:
 
-- **Poner `DEBUG=false` y `META_APP_SECRET` con valor**, además de
-  `META_PHONE_NUMBER_ID`, `META_ACCESS_TOKEN` (el token permanente del System
-  User, no el temporal de 24hs) y `META_VERIFY_TOKEN`. El default de
-  `.env.example` es `DEBUG=true` con el secreto vacío, que es lo correcto para
-  desarrollar pero deja el webhook abierto. El problema es que **si alguien se
-  olvida de cambiarlo en producción, nada falla ruidosamente**: el server
-  levanta bien, los mensajes llegan y el bot responde, y lo único que avisa es
-  un `WARNING` en el log que nadie está mirando. No hay error, no hay 500, no
-  hay síntoma visible — solo un webhook público. Un chequeo al arrancar que
-  corte el boot si `DEBUG=false` y falta el secreto sería la forma de que esto
-  falle fuerte en vez de en silencio.
+- **Poner `DEBUG=false`**, además de `META_PHONE_NUMBER_ID`, `META_ACCESS_TOKEN`
+  (el token permanente del System User, no el temporal de 24hs), `META_VERIFY_TOKEN`
+  y `META_APP_SECRET`. Esto último ya no depende de acordarse: desde
+  spec-validacion-config-arranque.md, `validar_config()` exige `META_APP_SECRET`
+  sin condición, en `al_iniciar()` — un valor vacío corta el boot con error
+  antes de aceptar requests, no un `WARNING` que nadie mira. El único
+  riesgo que queda es dejar `DEBUG=true` en producción: eso no lo valida
+  nada (es una elección legítima en dev), así que sigue siendo algo a
+  revisar a mano al deployar.
 - **Para producción, además:** `PROVEEDOR_IA=claude` con `ANTHROPIC_API_KEY` y
   `MODELO` apuntando a un modelo chico y rápido (Haiku), no al más grande.
 - **Que alguien se entere cuando el bot escala.** Hoy no pasa nada: se prende
