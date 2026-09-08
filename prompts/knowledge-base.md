@@ -236,11 +236,13 @@ En el laboratorio todos los miembros participan y pueden proponer lo que quieran
 No hay búsquedas laborales ni pasantías abiertas. De todos modos ENE **recibe CVs y confirma su recepción**: se envían a recepcion.ene.pctnqn@gmail.com y quedan en consideración para cuando surja una búsqueda. Eso no implica una entrevista ni un proceso abierto.
 
 **¿Tienen cafetería?**
-Sí. **The Coffee Store**, en la planta baja de ENE. Tiene acceso exclusivo a todos los pisos para brindar atención, y se puede abrir cuenta corriente empresarial.
+Sí. **The Coffee Store**, en la planta baja de ENE. Se puede abrir cuenta corriente empresarial.
 
 **Work Café es una sección privada dentro de The Coffee Store**, no otro lugar. Cuando el KB dice que el seat mensual "incluye acceso a Work Café", se refiere a esa sección. Son un mismo local con una parte reservada, y conviene explicarlo así si alguien pregunta por los dos nombres.
 
-**Teléfono de la cafetería: +54 9 2996 30-9333.** Es un número aparte del bot. Se lo das a quien está en el edificio y quiere pedir algo; no es un canal de consultas sobre ENE ni sobre el laboratorio, así que no lo ofrezcas para otra cosa.
+**Cómo se pide en la cafetería (decidido, septiembre 2026): bajando.** No hay pedidos por teléfono ni entrega en los pisos: quien está en el edificio y quiere tomar o comer algo baja a la planta baja y lo pide ahí. **El bot no da ningún teléfono de la cafetería.**
+
+Lo que sí se puede hacer es **subir lo consumido y tomarlo o comerlo en las oficinas**. No hace falta quedarse en la planta baja.
 
 **¿El laboratorio resuelve el problema puntual de mi empresa?**
 El bot **explica y no escala todavía**: el laboratorio no toma encargos sueltos como una consultora, trabaja por verticales y con la metodología de tres pasos de la sección 4 (se releva el problema junto a los referentes de la vertical y de ahí salen prototipos y automatizaciones). Sumarse a la vertical que corresponde es la vía.
@@ -366,7 +368,6 @@ Canal: recepcion.ene.pctnqn@gmail.com (asunto: "Solicito presentación ENE IA LA
 
 **Pendiente, prioridad alta:**
 
-- [ ] **Teléfono de la cafetería** (para pasárselo a quien ya está en el edificio)
 - [ ] **Valor del seat por día** (hoy "CONSULTAR")
 - [ ] Quién recibe las conversaciones escaladas y en qué casilla de mail. El horario ya está: 8 a 18, lunes a viernes.
 - [ ] Datos bancarios: quién los manda y en qué momento. Que **no** los mande el bot ya está decidido y no se discute; lo que falta definir es el circuito humano.
@@ -417,7 +418,7 @@ Canal: recepcion.ene.pctnqn@gmail.com (asunto: "Solicito presentación ENE IA LA
 - [x] Dirección exacta (Raúl Soldi 350) y descripción del complejo ✅
 - [x] Mail general del polo: recepcion.ene.pctnqn@gmail.com (info@ quedó obsoleto) ✅
 - [x] CVs: se mandan al mail general ✅
-- [x] Teléfono de la cafetería ✅
+- [x] Cafetería: se pide bajando a planta baja, sin teléfono; se puede subir lo consumido a las oficinas ✅
 - [x] Servicios publicados del espacio de coworking ✅
 
 ---
