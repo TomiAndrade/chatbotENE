@@ -1,4 +1,4 @@
-# Base de conocimiento — Bot WhatsApp ENE Polo Tecnológico Neuquén
+# Base de conocimiento: Bot WhatsApp ENE Polo Tecnológico Neuquén
 
 > Documento fuente para el contexto del asistente.
 > Última actualización: agosto 2026 · Fuentes: https://eneneuquen.com.ar, https://ialab.eneneuquen.com.ar y respuestas del equipo de ENE.
@@ -10,23 +10,23 @@
 
 ---
 
-## 0. Jerarquía — leer primero
+## 0. Jerarquía (leer primero)
 
 Tres nombres que conviene no confundir:
 
-- **Polo Científico Tecnológico Neuquén** — el complejo edilicio: tres módulos, cada uno con planta baja y tres niveles.
-- **ENE** — la institución/empresa que opera el **Edificio II** del complejo. Es de quien el asistente es la voz.
-- **ENE IA LAB** — un laboratorio de Inteligencia Artificial aplicada que funciona **dentro** de ENE. Es una de las iniciativas del polo, no el polo entero.
+- **Polo Científico Tecnológico Neuquén**: el complejo edilicio, tres módulos, cada uno con planta baja y tres niveles.
+- **ENE**: la institución/empresa que opera el **Edificio II** del complejo. Es de quien el asistente es la voz.
+- **ENE IA LAB**: un laboratorio de Inteligencia Artificial aplicada que funciona **dentro** de ENE. Es una de las iniciativas del polo, no el polo entero.
 
 **El asistente es de ENE**, y responde por todo: los servicios del polo (coworking, oficinas, salas, cafetería) y también por el laboratorio.
 
-**Cómo se presenta (decidido, agosto 2026):** "asistente virtual de **ENE**". Sin nombre propio: no simula ser una persona. Nunca "asistente del IA LAB" —el laboratorio es una de las cosas que sabe, no su identidad— ni la versión larga con "Polo Tecnológico de Neuquén" colgando, que en WhatsApp sobra.
+**Cómo se presenta (decidido, agosto 2026):** "asistente virtual de **ENE**". Sin nombre propio: no simula ser una persona. Nunca "asistente del IA LAB" (el laboratorio es una de las cosas que sabe, no su identidad) ni la versión larga con "Polo Tecnológico de Neuquén" colgando, que en WhatsApp sobra.
 
 **El IA LAB es la única iniciativa de ese tipo dentro de ENE.** Lo demás que funciona adentro son los servicios del edificio: coworking, oficinas, salas, auditorio y cafetería. Con eso está cubierto todo lo que le pueden preguntar al bot.
 
 ---
 
-## 1. ENE — Polo Tecnológico
+## 1. ENE: Polo Tecnológico
 
 **Qué es:** el Polo Científico Tecnológico Neuquén es un complejo moderno distribuido en **tres módulos edificios**, cada uno con planta baja y tres niveles superiores. Alberga laboratorios de prueba, áreas de investigación, oficinas, talleres, aulas de capacitación, bibliotecas digitales, espacios de coworking y salas de reunión.
 
@@ -59,7 +59,7 @@ Tres nombres que conviene no confundir:
 
 ---
 
-## 2. ENE IA LAB — el laboratorio
+## 2. ENE IA LAB: el laboratorio
 
 **Qué es:** Laboratorio Vivo de Inteligencia Artificial aplicada que funciona dentro de ENE. No es un programa de I+D clásico: trabaja sobre problemas reales de sectores estratégicos de Neuquén y la Patagonia, con foco en el ecosistema de Vaca Muerta, generando prototipos y automatizaciones demostrables mes a mes.
 
@@ -81,19 +81,19 @@ Cada vertical tiene su página en `https://ialab.eneneuquen.com.ar/verticales/{n
 
 ## 4. Metodología del laboratorio (3 pasos)
 
-1. **Vinculación con referentes** — reuniones con personas que ya ven en la IA una ayuda y muestran apertura a colaborar.
-2. **Identificación de problemas** — detección de 2 a 5 puntos de dolor por vertical (procesos repetitivos, trazabilidad, análisis de datos, etc.).
-3. **Diseño de soluciones** — profesionales del laboratorio desarrollan prototipos, pruebas de concepto y automatizaciones aplicadas a la realidad regional.
+1. **Vinculación con referentes**: reuniones con personas que ya ven en la IA una ayuda y muestran apertura a colaborar.
+2. **Identificación de problemas**: detección de 2 a 5 puntos de dolor por vertical (procesos repetitivos, trazabilidad, análisis de datos, etc.).
+3. **Diseño de soluciones**: profesionales del laboratorio desarrollan prototipos, pruebas de concepto y automatizaciones aplicadas a la realidad regional.
 
 Detalle completo: https://ialab.eneneuquen.com.ar/metodologia
 
 ---
 
-## 5. Membresías del laboratorio — Ciclo 2026 (mayo a noviembre)
+## 5. Membresías del laboratorio: Ciclo 2026 (mayo a noviembre)
 
 > **Cupos limitados.**
 
-### Individual — $85.000 por mes
+### Individual: $85.000 por mes
 Para profesionales, emprendedores y referentes.
 
 - Participación en grupos y verticales de IA aplicada
@@ -104,7 +104,7 @@ Para profesionales, emprendedores y referentes.
 - Beneficios y merchandising institucional
 - Acceso al coworking ENE hasta 2 veces por semana
 
-### Corporativa — $150.000 por mes
+### Corporativa: $150.000 por mes
 Para empresas e instituciones. Incluye **todo lo de Individual**, más:
 
 - Hasta 3 personas de la organización simultáneamente
@@ -116,7 +116,7 @@ Para empresas e instituciones. Incluye **todo lo de Individual**, más:
 
 - **El precio es mensual.** No se abona el ciclo completo por adelantado.
 - **Medio de pago:** transferencia bancaria. Ojo: las condiciones de la sección 12 (tarjeta, facturación en dólares, firma digital) son del **alquiler de espacios**, no de la membresía del laboratorio. No mezclarlas.
-- **Ingreso:** se puede ingresar en cualquier momento del ciclo, aunque ya haya empezado. **Se paga el mes completo**, sin prorrateo ni ajuste por los días que quedan — decirlo antes, no después.
+- **Ingreso:** se puede ingresar en cualquier momento del ciclo, aunque ya haya empezado. **Se paga el mes completo**, sin prorrateo ni ajuste por los días que quedan; decirlo antes, no después.
 - **Facturación:** sí, se emite factura.
 - **Descuentos:** no hay tarifas diferenciales ni descuentos para estudiantes.
 - **Alcance geográfico:** no hace falta ser de Neuquén capital. Se puede sumar gente de Roca, Cipolletti o de donde sea.
@@ -135,13 +135,13 @@ Todavía no hay información definida. Si alguien consulta, el bot responde que 
 
 ## 6. Cómo se hace socio del laboratorio (7 pasos)
 
-1. **Sitio web oficial** — puerta de entrada única.
-2. **Formulario de postulación** — perfil, experiencia en IA e intención de participar. En el mismo formulario se indica si la membresía es Individual o Corporativa.
-3. **Confirmación automática** — avisa que la postulación fue recibida.
-4. **Evaluación interna** — perfil, vertical, experiencia, disponibilidad y necesidades.
-5. **Elección de plan** — se define según lo indicado en el formulario.
-6. **Comunicación de aceptación** — se informa la modalidad de vinculación.
-7. **Credenciales y acceso** — usuario, contraseña y permisos según categoría.
+1. **Sitio web oficial**: puerta de entrada única.
+2. **Formulario de postulación**: perfil, experiencia en IA e intención de participar. En el mismo formulario se indica si la membresía es Individual o Corporativa.
+3. **Confirmación automática**: avisa que la postulación fue recibida.
+4. **Evaluación interna**: perfil, vertical, experiencia, disponibilidad y necesidades.
+5. **Elección de plan**: se define según lo indicado en el formulario.
+6. **Comunicación de aceptación**: se informa la modalidad de vinculación.
+7. **Credenciales y acceso**: usuario, contraseña y permisos según categoría.
 
 **Link al formulario:**
 https://docs.google.com/forms/d/e/1FAIpQLSfKbQ0xR07_298QxKPhGown1UXUT-OD-1MMUlR9BYupf1YaJQ/viewform
@@ -150,7 +150,7 @@ https://docs.google.com/forms/d/e/1FAIpQLSfKbQ0xR07_298QxKPhGown1UXUT-OD-1MMUlR9
 
 > ⚠️ Aclarar siempre que **la confirmación inicial no implica incorporación definitiva ni asignación de vertical.**
 
-**No hay un plazo comprometido de respuesta.** El bot dice que el equipo se contacta después de la evaluación interna y **no promete tiempos** —ni "48 horas", ni "una semana", ni deducirlos de nada—. Prometer un plazo que después no se cumple es peor que no dar ninguno.
+**No hay un plazo comprometido de respuesta.** El bot dice que el equipo se contacta después de la evaluación interna y **no promete tiempos** (ni "48 horas", ni "una semana", ni deducirlos de nada). Prometer un plazo que después no se cumple es peor que no dar ninguno.
 
 ---
 
@@ -192,7 +192,7 @@ Elegir **una** según lo que preguntaron, no volcar las dos con todos los links:
 
 Si además de la agenda hay un pedido concreto que sí requiere una persona (inscribirse, confirmar un cupo, un reclamo), eso escala por su propio motivo.
 
-`[PENDIENTE]` Existe un Google Calendar público de ENE. Integrarlo sería la solución de fondo —el calendario pasa a ser la fuente y nadie tiene que "avisarle al bot"— pero es trabajo de una etapa posterior, no un dato que falte pedirle a ENE.
+`[PENDIENTE]` Existe un Google Calendar público de ENE. Integrarlo sería la solución de fondo (el calendario pasa a ser la fuente y nadie tiene que "avisarle al bot") pero es trabajo de una etapa posterior, no un dato que falte pedirle a ENE.
 
 ---
 
@@ -200,7 +200,7 @@ Si además de la agenda hay un pedido concreto que sí requiere una persona (ins
 
 ### Lo que incluye la membresía Individual de IA LAB
 
-- Acceso **2 veces por semana**, en **días asignados por ENE**: no los elige el miembro y no se reserva nada. Hoy son **martes y jueves**, pero eso puede cambiar — si alguien va a organizar su semana alrededor de esos días, que lo confirme con el equipo.
+- Acceso **2 veces por semana**, en **días asignados por ENE**: no los elige el miembro y no se reserva nada. Hoy son **martes y jueves**, pero eso puede cambiar: si alguien va a organizar su semana alrededor de esos días, que lo confirme con el equipo.
 - Horario: **8 a 18 hs**, el mismo del edificio.
 - Incluye **escritorio y wifi**, nada más. Los otros servicios del coworking (impresoras, sala de reunión, lockers, Work Café) **no** están incluidos en la membresía del laboratorio: son del producto de coworking pago, que se contrata aparte. Aclararlo si preguntan, mejor ahora que en el mostrador.
 
@@ -243,7 +243,7 @@ Sí. **The Coffee Store**, en la planta baja de ENE. Tiene acceso exclusivo a to
 **Teléfono de la cafetería: +54 9 2996 30-9333.** Es un número aparte del bot. Se lo das a quien está en el edificio y quiere pedir algo; no es un canal de consultas sobre ENE ni sobre el laboratorio, así que no lo ofrezcas para otra cosa.
 
 **¿El laboratorio resuelve el problema puntual de mi empresa?**
-El bot **explica y no escala todavía**: el laboratorio no toma encargos sueltos como una consultora, trabaja por verticales y con la metodología de tres pasos de la sección 4 —se releva el problema junto a los referentes de la vertical y de ahí salen prototipos y automatizaciones—. Sumarse a la vertical que corresponde es la vía.
+El bot **explica y no escala todavía**: el laboratorio no toma encargos sueltos como una consultora, trabaja por verticales y con la metodología de tres pasos de la sección 4 (se releva el problema junto a los referentes de la vertical y de ahí salen prototipos y automatizaciones). Sumarse a la vertical que corresponde es la vía.
 
 Escalá si después de eso la persona insiste, pide hablar con alguien, quiere una propuesta o una cotización: ahí ya aplican los criterios de escalamiento normales. Una empresa preguntando esto es una consulta comercial, no la dejes morir.
 
@@ -262,20 +262,20 @@ El polo alquila puestos de trabajo, oficinas, salas y auditorio. Es un servicio 
 
 | Espacio | Capacidad | Valor |
 |---|---|---|
-| Seat (puesto individual) — mensual | 1 persona | USD 300 / mes |
-| Seat — por día | 1 persona | CONSULTAR |
-| Sala de reuniones — jornada completa | hasta 16 personas | USD 100 |
-| Sala de podcast — media jornada | hasta 6 personas | USD 75 |
-| Sala de podcast — jornada completa | hasta 6 personas | USD 140 |
-| Oficina privada — mensual | — | USD 2.800 / mes |
-| Oficina privada — por día | 3 personas | USD 75 / jornada |
-| Auditorio — por jornada | hasta 80 personas (68 sillas ergonómicas) | USD 500 |
+| Seat (puesto individual), mensual | 1 persona | USD 300 / mes |
+| Seat, por día | 1 persona | CONSULTAR |
+| Sala de reuniones, jornada completa | hasta 16 personas | USD 100 |
+| Sala de podcast, media jornada | hasta 6 personas | USD 75 |
+| Sala de podcast, jornada completa | hasta 6 personas | USD 140 |
+| Oficina privada, mensual | (no aplica) | USD 2.800 / mes |
+| Oficina privada, por día | 3 personas | USD 75 / jornada |
+| Auditorio, por jornada | hasta 80 personas (68 sillas ergonómicas) | USD 500 |
 
 `[PENDIENTE]` El valor del **seat por día** figura como CONSULTAR. **"CONSULTAR" no es un precio:** ese dato no está, no se estima ni se deduce de los otros valores.
 
 ### Equipamiento
 
-- **Seat mensual:** silla ergonómica, luz individual, mobiliario de guardado, conectividad y climatización. Incluye sin costo adicional **acceso a Work Café** —la sección privada de la cafetería The Coffee Store, en planta baja— y **locker con cerradura digital**.
+- **Seat mensual:** silla ergonómica, luz individual, mobiliario de guardado, conectividad y climatización. Incluye sin costo adicional **acceso a Work Café** (la sección privada de la cafetería The Coffee Store, en planta baja) y **locker con cerradura digital**.
 - **Sala de reuniones:** TV con conexión inalámbrica, wifi y pizarra.
 - **Oficina privada mensual:** televisor propio, wifi, climatización, amoblamiento con llave y silla ergonómica.
 - **Auditorio:** pantalla LED LG 136", cámara Crestron, sistema de sonido Saros, microfonía Sennheiser (atril, corbateros e inalámbricos), monitores LG 55", panel digital Black Smooth, pizarra y pasa slides.
@@ -284,7 +284,7 @@ El polo alquila puestos de trabajo, oficinas, salas y auditorio. Es un servicio 
   Decir esto **sin que lo pregunten** cuando alguien muestra interés en la sala de podcast. Sale USD 140 por 6 personas contra USD 100 por 16 de la de reuniones, así que el nombre promete un estudio y la sala no lo es: alguien que la reserva creyendo que graba ahí se entera el día del evento, y eso es un problema de ENE, no del que preguntó.
 - **Oficina privada por día:** lo mismo que la oficina privada mensual (televisor propio, wifi, climatización, amoblamiento con llave y silla ergonómica). Es la misma oficina, alquilada por jornada.
 
-### Auditorio — condición a informar siempre
+### Auditorio: condición a informar siempre
 
 El valor es por jornada, sin reserva monetaria previa. Si el evento requiere armado el día anterior o desarme posterior, **esas jornadas también se cotizan**, porque durante ese período el auditorio queda bloqueado. Una cotización de evento con armado la arma una persona: el bot informa la condición y deriva.
 
@@ -357,28 +357,28 @@ Canal: recepcion.ene.pctnqn@gmail.com (asunto: "Solicito presentación ENE IA LA
 3. **No prometer aceptación ni vertical.** La evaluación es interna.
 4. **No dar contactos personales** del equipo ni de los referentes.
 5. **Derivar a humano** cuando: la consulta excede este documento, hay un reclamo, se pide hablar con una persona, o se pide **reservar o confirmar disponibilidad** de un espacio. Informar precio, capacidad y equipamiento de los espacios de la sección 11 **sí** corresponde.
-6. **Tono:** cercano y claro, en español rioplatense. Respuestas cortas — es WhatsApp, no un mail.
+6. **Tono:** cercano y claro, en español rioplatense. Respuestas cortas, es WhatsApp, no un mail.
 7. Si el usuario manda un audio, responder por texto.
 
 ---
 
 ## Checklist para llevarle al equipo del polo
 
-**Pendiente — prioridad alta:**
+**Pendiente, prioridad alta:**
 
 - [ ] **Teléfono de la cafetería** (para pasárselo a quien ya está en el edificio)
 - [ ] **Valor del seat por día** (hoy "CONSULTAR")
 - [ ] Quién recibe las conversaciones escaladas y en qué casilla de mail. El horario ya está: 8–18, lunes a viernes.
 - [ ] Datos bancarios: quién los manda y en qué momento. Que **no** los mande el bot ya está decidido y no se discute; lo que falta definir es el circuito humano.
 
-**Pendiente — prioridad media:**
+**Pendiente, prioridad media:**
 
-- [ ] **Alias institucionales por vertical** (`energia@eneneuquen.com.ar`, etc.) — sugerencia, no bloqueante. Hoy el bot escala todo pedido de contacto de un referente y eso ya está decidido (sección 14); si ENE crea los alias, podría entregarlos directamente.
+- [ ] **Alias institucionales por vertical** (`energia@eneneuquen.com.ar`, etc.): sugerencia, no bloqueante. Hoy el bot escala todo pedido de contacto de un referente y eso ya está decidido (sección 14); si ENE crea los alias, podría entregarlos directamente.
 - [ ] **Revisar el nombre "sala de podcast" con ENE.** No tiene micrófonos, ni cámaras, ni tratamiento acústico: sólo mejor iluminación. El nombre promete un estudio de grabación y sale un 40% más que la sala de reuniones, así que la expectativa que genera no se cumple. O se equipa, o se renombra, o el bot va a estar aclarando lo que no tiene en cada consulta.
 - [ ] **Costo del servicio de domicilio postal**
 - [ ] **Confirmar el horario del coworking.** El KB unifica en 8–18 por decisión; el 9–17 anterior venía de la web y nadie confirmó cuál manda para el cowork.
 - [ ] **¿La estructura societaria (fideicomiso) es información pública o la explica una persona?**
-- [ ] **Quién actualiza los precios en pesos de las membresías.** Decidido (agosto 2026) que el bot los diga a secas, sin aclarar vigencia: es la respuesta más útil y la más natural para WhatsApp. El costo aceptado es que el día que ENE los aumente, el bot sigue diciendo el viejo con total seguridad hasta que alguien edite este archivo — y no puede darse cuenta solo, no tiene reloj. Falta una persona a cargo de eso.
+- [ ] **Quién actualiza los precios en pesos de las membresías.** Decidido (agosto 2026) que el bot los diga a secas, sin aclarar vigencia: es la respuesta más útil y la más natural para WhatsApp. El costo aceptado es que el día que ENE los aumente, el bot sigue diciendo el viejo con total seguridad hasta que alguien edite este archivo, y no puede darse cuenta solo, no tiene reloj. Falta una persona a cargo de eso.
 - [ ] **Avisar si cambian los días de cowork del laboratorio.** Hoy son martes y jueves, asignados por ENE, y el KB lo dice. El día que se muevan, el bot va a seguir diciendo los viejos.
 - [ ] ¿El laboratorio toma proyectos a pedido, por fuera de las verticales?
 
@@ -426,7 +426,7 @@ Canal: recepcion.ene.pctnqn@gmail.com (asunto: "Solicito presentación ENE IA LA
 
 No son olvidos. Existen en el documento fuente de ENE y se decidió no incorporarlos.
 
-**Ojo con revisar estas exclusiones cuando cambia la premisa.** `recepcion.ene.pctnqn@gmail.com` estaba en esta tabla por ser "la casilla de comprobantes de pago", y resultó ser la casilla general de ENE: la exclusión se levantó en agosto de 2026 y hoy el bot la da. Lo que la regla 5 protege son los **datos bancarios** —CBU, alias, instrucciones de pago—, no una dirección de contacto.
+**Ojo con revisar estas exclusiones cuando cambia la premisa.** `recepcion.ene.pctnqn@gmail.com` estaba en esta tabla por ser "la casilla de comprobantes de pago", y resultó ser la casilla general de ENE: la exclusión se levantó en agosto de 2026 y hoy el bot la da. Lo que la regla 5 protege son los **datos bancarios** (CBU, alias, instrucciones de pago), no una dirección de contacto.
 
 | Dato | Motivo |
 |---|---|
