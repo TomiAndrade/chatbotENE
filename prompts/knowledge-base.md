@@ -144,7 +144,7 @@ Todavía no hay información definida. Si alguien consulta, el bot responde que 
 7. **Credenciales y acceso**: usuario, contraseña y permisos según categoría.
 
 **Link al formulario:**
-https://docs.google.com/forms/d/e/1FAIpQLSfKbQ0xR07_298QxKPhGown1UXUT-OD-1MMUlR9BYupf1YaJQ/viewform
+https://forms.gle/kEHDmEVJFD3f1K3RA
 
 > ⚠️ **El bot NO inscribe a nadie.** Su función es explicar, despejar dudas y derivar al formulario.
 
@@ -368,7 +368,7 @@ Canal: recepcion.ene.pctnqn@gmail.com (asunto: "Solicito presentación ENE IA LA
 
 - [ ] **Teléfono de la cafetería** (para pasárselo a quien ya está en el edificio)
 - [ ] **Valor del seat por día** (hoy "CONSULTAR")
-- [ ] Quién recibe las conversaciones escaladas y en qué casilla de mail. El horario ya está: 8–18, lunes a viernes.
+- [ ] Quién recibe las conversaciones escaladas y en qué casilla de mail. El horario ya está: 8 a 18, lunes a viernes.
 - [ ] Datos bancarios: quién los manda y en qué momento. Que **no** los mande el bot ya está decidido y no se discute; lo que falta definir es el circuito humano.
 
 **Pendiente, prioridad media:**
@@ -376,7 +376,7 @@ Canal: recepcion.ene.pctnqn@gmail.com (asunto: "Solicito presentación ENE IA LA
 - [ ] **Alias institucionales por vertical** (`energia@eneneuquen.com.ar`, etc.): sugerencia, no bloqueante. Hoy el bot escala todo pedido de contacto de un referente y eso ya está decidido (sección 14); si ENE crea los alias, podría entregarlos directamente.
 - [ ] **Revisar el nombre "sala de podcast" con ENE.** No tiene micrófonos, ni cámaras, ni tratamiento acústico: sólo mejor iluminación. El nombre promete un estudio de grabación y sale un 40% más que la sala de reuniones, así que la expectativa que genera no se cumple. O se equipa, o se renombra, o el bot va a estar aclarando lo que no tiene en cada consulta.
 - [ ] **Costo del servicio de domicilio postal**
-- [ ] **Confirmar el horario del coworking.** El KB unifica en 8–18 por decisión; el 9–17 anterior venía de la web y nadie confirmó cuál manda para el cowork.
+- [ ] **Confirmar el horario del coworking.** El KB unifica en 8 a 18 por decisión; el 9 a 17 anterior venía de la web y nadie confirmó cuál manda para el cowork.
 - [ ] **¿La estructura societaria (fideicomiso) es información pública o la explica una persona?**
 - [ ] **Quién actualiza los precios en pesos de las membresías.** Decidido (agosto 2026) que el bot los diga a secas, sin aclarar vigencia: es la respuesta más útil y la más natural para WhatsApp. El costo aceptado es que el día que ENE los aumente, el bot sigue diciendo el viejo con total seguridad hasta que alguien edite este archivo, y no puede darse cuenta solo, no tiene reloj. Falta una persona a cargo de eso.
 - [ ] **Avisar si cambian los días de cowork del laboratorio.** Hoy son martes y jueves, asignados por ENE, y el KB lo dice. El día que se muevan, el bot va a seguir diciendo los viejos.
