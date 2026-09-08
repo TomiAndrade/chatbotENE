@@ -58,12 +58,13 @@ from sqlalchemy.exc import IntegrityError
 
 from app import mensajes
 from app.config import config
-from app.db import SessionLocal, init_db
+from app.db import SessionLocal, crear_engine, init_db
 from app.historial import construir_historial
 from app.limite import mensajes_ultima_hora
 from app.meta import MetaClient, verificar_challenge, verificar_firma_webhook
 from app.models import CANAL_WHATSAPP, Conversacion, Mensaje, MotivoPausa, RolMensaje
 from app.respuesta import ErrorTransitorioProveedor, generar_respuesta
+from app.validacion_config import ConfigInvalida, resumen_config, validar_config
 
 class _FormatterUTC(logging.Formatter):
     """`%(asctime)s` en UTC, no en la hora local del servidor.
@@ -105,6 +106,22 @@ meta_client = MetaClient()
 
 @app.on_event("startup")
 def al_iniciar() -> None:
+    """Valida la configuración antes de tocar la base o aceptar requests
+    (ver spec-validacion-config-arranque.md). Si falta o es incoherente, el
+    proceso no debe levantar: se loguea todo lo que está mal y se corta acá,
+    antes de crear_engine() — así una DATABASE_URL ausente no llega a crear
+    ningún archivo SQLite ni deja el webhook respondiendo sobre una config
+    rota. crear_engine() va antes de init_db() porque necesita el engine ya
+    creado; los dos corren acá, en el hilo principal del startup, para que
+    no exista ninguna ventana de concurrencia en la que crearlo (ver
+    app/db.py sobre por qué no se crea "on demand")."""
+    try:
+        validar_config(config)
+    except ConfigInvalida as error:
+        logger.error(str(error))
+        raise
+    logger.info(resumen_config(config))
+    crear_engine()
     init_db()
 
 

@@ -15,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.db import SessionLocal
+from app.db import SessionLocal, crear_engine
 from app.models import CANAL_WHATSAPP, Conversacion
 
 
@@ -44,6 +44,11 @@ if __name__ == "__main__":
     if len(sys.argv) != 2:
         print(f"Uso: python {sys.argv[0]} <telefono>")
         sys.exit(1)
+
+    # app/db.py ya no crea el engine al importar (ver
+    # spec-validacion-config-arranque.md): hay que pedirlo explícito antes
+    # del primer SessionLocal().
+    crear_engine()
 
     telefono_arg = sys.argv[1]
     if resetear_modo_humano(telefono_arg):

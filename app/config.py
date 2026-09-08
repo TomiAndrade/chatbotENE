@@ -44,8 +44,11 @@ def _cargar_config() -> Config:
         meta_app_secret=os.getenv("META_APP_SECRET", ""),
         meta_verify_token=os.getenv("META_VERIFY_TOKEN", ""),
         meta_api_version=os.getenv("META_API_VERSION", "v23.0"),
-        database_url=os.getenv("DATABASE_URL", "sqlite:///./bot.db"),
-        proveedor_ia=os.getenv("PROVEEDOR_IA", "fijo"),
+        # Sin default: ver spec-validacion-config-arranque.md. Que falten
+        # cae en un string vacío, que validar_config() trata como ausente
+        # (nunca en SQLite ni en "fijo" silenciosos).
+        database_url=os.getenv("DATABASE_URL", ""),
+        proveedor_ia=os.getenv("PROVEEDOR_IA", ""),
         debug=os.getenv("DEBUG", "false").lower() == "true",
         modelo=os.getenv("MODELO", ""),
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),

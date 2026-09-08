@@ -340,9 +340,10 @@ Cuando se vaya a deployar (fuera de alcance por ahora, ver punto 9):
 - `MODELO` apuntando a un modelo chico y rápido (Haiku), **no** al más grande:
   las respuestas son cortas y el volumen es de WhatsApp.
 - `DATABASE_URL` a Postgres. Migrar es cambiar esa variable y nada más: en
-  Render se enlaza desde la base administrada, y `normalizar_url`
-  (`app/db.py`) se ocupa del prefijo `postgres://` que entrega Render. Ver la
-  sección 5.b por lo que **no** cubre ese cambio.
+  Render se enlaza desde la base administrada y viene ya con el esquema
+  `postgresql://`, que es el que espera SQLAlchemy y el que exige
+  `validar_config()` — no se reescribe en ningún lado. Ver la sección 5.b
+  por lo que **no** cubre ese cambio.
 
 ---
 
