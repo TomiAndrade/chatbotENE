@@ -40,7 +40,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import models
-from app.db import SessionLocal, init_db
+from app.db import SessionLocal, crear_engine, init_db
 from app.main import app, meta_client
 
 TELEFONO_DE_PRUEBA = "5492995551234"
@@ -48,6 +48,11 @@ TELEFONO_DE_PRUEBA = "5492995551234"
 
 @pytest.fixture(scope="session", autouse=True)
 def _tablas():
+    """Esta suite no pasa por al_iniciar() (ver fixture `client` más abajo),
+    así que nadie más llama a crear_engine(): sin esto, init_db() y
+    cualquier SessionLocal() de los tests revientan con el RuntimeError de
+    app/db.py."""
+    crear_engine()
     init_db()
     yield
 
@@ -91,5 +96,11 @@ def meta_enviados(monkeypatch):
 
 @pytest.fixture
 def client(meta_enviados):
-    with TestClient(app) as test_client:
-        yield test_client
+    """Sin `with TestClient(app) as ...`: ese context manager dispara el
+    evento startup real de la app, que desde spec-validacion-config-arranque.md
+    también corre validar_config() — y esta suite fija DATABASE_URL a SQLite
+    a propósito (ver arriba), que la validación rechaza sin excepción, sin
+    importar el entorno. Las tablas ya las crea el fixture `_tablas` llamando
+    init_db() directo, así que no hace falta pasar por el ciclo de vida
+    completo de FastAPI solo para pegarle al webhook."""
+    return TestClient(app)

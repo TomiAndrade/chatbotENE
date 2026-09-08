@@ -40,8 +40,22 @@ Completar en `.env`:
 
 ### 3. Base de datos
 
-No hace falta nada manual: la primera vez que arranca el servidor crea
-`bot.db` (SQLite) y las tablas solas.
+Hace falta una instancia de Postgres, **incluso para desarrollar local** —
+no hay modo SQLite (spec-validacion-config-arranque.md: "sin modo dev", la
+validación al arrancar exige Postgres en todos los entornos, sin ninguna
+variable que lo relaje). Completar `DATABASE_URL` en `.env`:
+
+```
+DATABASE_URL=postgresql://usuario:password@host:5432/nombre_db
+```
+
+Puede ser una instancia local o una compartida — lo único que importa es que
+sea Postgres real. Sin `DATABASE_URL`, o con cualquier otro esquema (SQLite
+incluido), el server no levanta: `validar_config()` corta el arranque y
+loguea qué falta, antes de tocar la base.
+
+No hace falta nada manual más allá de eso: la primera vez que arranca el
+servidor, `init_db()` crea las tablas solo.
 
 ### 4. Levantar el servidor
 
@@ -84,7 +98,7 @@ no anda.
 
 1. Escribir al número sandbox desde un celular — el mensaje debe aparecer en
    la consola del servidor.
-2. Confirmar que quedó guardado: `sqlite3 bot.db "select * from mensajes;"`.
+2. Confirmar que quedó guardado: `psql "$DATABASE_URL" -c "select * from mensajes;"`.
 3. Debe llegar una respuesta fija al WhatsApp del celular.
 4. Marcar modo humano a mano para un número. `motivo_pausa` se setea
    explícito a `'escalamiento'` para que no dependa de quedar `NULL` por
@@ -92,7 +106,7 @@ no anda.
    `app/main.py` lo trata como si no expirara), pero dejarlo así en una
    fila creada a mano es un dato indefinido, no una decisión:
    ```sql
-   sqlite3 bot.db "update conversaciones set modo_humano = 1, motivo_pausa = 'escalamiento' where identificador_externo = '<numero>';"
+   psql "$DATABASE_URL" -c "update conversaciones set modo_humano = 1, motivo_pausa = 'escalamiento' where identificador_externo = '<numero>';"
    ```
    El bot deja de responder a ese número. Para desmarcarlo, usar
    `scripts/resetear_modo_humano.py <numero>` en vez de otro UPDATE a mano —
@@ -101,16 +115,14 @@ no anda.
 5. Reenviar el mismo evento desde el panel de ngrok (Replay) no debe crear un
    mensaje duplicado — se descarta por `wa_message_id` repetido.
 
-## Cambiar de SQLite a Postgres
+## Postgres — notas y checklist manual antes de deployar
 
-Cambiar `DATABASE_URL` en `.env` (ej.
-`postgresql://usuario:password@host:5432/nombre_db`). No hay que tocar código.
-
-En Render la variable se enlaza desde la base administrada, no se escribe a
-mano. Render la entrega con el prefijo `postgres://`, que SQLAlchemy ya no
-acepta: `normalizar_url` (`app/db.py`) lo convierte a `postgresql://` al
-arrancar, así que se puede pegar tal cual viene y sobrevive a una rotación de
-credenciales.
+`DATABASE_URL` siempre apunta a Postgres, en local y en producción (ver
+"Base de datos" arriba — no hay modo SQLite). En Render la variable se
+enlaza desde la base administrada, no se escribe a mano. Render la entrega
+con el esquema `postgresql://`, que es el que SQLAlchemy espera y el que
+`validar_config()` exige: se usa tal cual viene, sin reescribir nada
+(verificado contra la base real, `ene-bot-db`).
 
 Las tablas las crea `init_db()` al levantar la app. **No hay migraciones**:
 `create_all` crea lo que falta pero no modifica nada existente, así que
@@ -118,8 +130,10 @@ cualquier cambio de esquema —incluido agregar un valor a `RolMensaje` o a
 `motivo_pausa`, que en Postgres son tipos nativos— hay que aplicarlo a mano
 con SQL. Ver PENDIENTES.md.
 
-Antes de deployar conviene validar a mano contra la base real, porque las
-diferencias que trae Postgres son justo las que SQLite no reproduce:
+Antes de deployar conviene validar a mano contra la base de Render, porque
+hay diferencias de comportamiento entre motores que ningún test cubre — la
+suite corre contra SQLite (ver "Correr los tests" abajo), a propósito, y no
+contra la base real:
 
 1. Apuntar `DATABASE_URL` a la base de Render desde la máquina local.
 2. Arrancar la app y confirmar que `init_db()` crea las tablas sin error.
@@ -130,6 +144,9 @@ diferencias que trae Postgres son justo las que SQLite no reproduce:
    aborta la transacción entera ante una constraint violada, más estricto que
    SQLite — hay que confirmar que el camino de idempotencia de
    `procesar_mensaje_entrante` sigue funcionando igual.
+
+`scripts/verificar_postgres.py` automatiza este checklist contra una base
+real (no se corre solo ni en CI).
 
 ## Cambiar el proveedor de respuestas
 
@@ -150,4 +167,7 @@ pytest
 No pegan a ninguna API real: Meta se mockea (`meta_enviados` en
 `tests/conftest.py`) y el proveedor de IA se mockea por test cuando hace
 falta (`fijo` no necesita mock). Usan una base SQLite aparte, en un
-directorio temporal, no `bot.db`.
+directorio temporal — es la única excepción a "Postgres siempre" de arriba:
+la suite fija `DATABASE_URL` antes de importar `app.config` y no pasa por
+`al_iniciar()` (ver `tests/conftest.py`), así que nunca llega a pasar por
+`validar_config()`.
