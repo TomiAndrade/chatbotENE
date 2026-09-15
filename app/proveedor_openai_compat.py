@@ -48,6 +48,8 @@ from app.respuesta import (
 
 logger = logging.getLogger("proveedor_openai_compat")
 
+MAX_TOKENS_RESPUESTA = 500
+
 # Instrumentación: separar el tiempo hasta los headers del tiempo hasta tener
 # el cuerpo entero. Importa porque la línea "HTTP Request: ..." que loguea
 # httpx NO marca el final de la llamada: httpx la escribe apenas vuelven los
@@ -134,6 +136,7 @@ class ProveedorOpenAICompat(ProveedorRespuesta):
                 "model": config.modelo,
                 "messages": mensajes,
                 "tools": _herramientas(),
+                "max_tokens": MAX_TOKENS_RESPUESTA,
             },
         )
         # Antes del raise_for_status: un 429 o un 5xx también tardan, y ese
