@@ -315,19 +315,64 @@ quién los manda y cuándo, no si los manda el bot.
 
 ---
 
-## 4. Que falte el secreto del webhook falle fuerte, no en silencio
+## 4. Que falte el secreto del webhook falle fuerte, no en silencio — resuelto
 
-Hoy, si en producción alguien deja `DEBUG=false` pero se olvida de poner
-`KAPSO_WEBHOOK_SECRET`, `verificar_firma_webhook` rechaza todo con 401
-(`app/kapso.py:110`), que es el comportamiento seguro. El problema es el caso
-inverso, el que sí es silencioso: **`DEBUG=true` con el secreto vacío deja el
-webhook abierto** a cualquiera que conozca la URL, y nada falla — el server
-levanta bien, los mensajes llegan, el bot responde. Lo único que avisa es un
-`WARNING` en el log que nadie está mirando.
+**Aplicado** (spec-validacion-config-arranque.md). El problema era el caso
+silencioso: `DEBUG=true` con el secreto vacío dejaba el webhook abierto a
+cualquiera que conozca la URL, y nada fallaba — el server levantaba bien, los
+mensajes llegaban, el bot respondía, y lo único que avisaba era un `WARNING`
+en el log que nadie mira.
 
-Lo que falta: un chequeo al arrancar que corte el boot si el secreto está vacío
-y no estamos claramente en desarrollo. Que el server no levante es la única
-forma de que esto se note.
+`validar_config()` ahora exige `META_APP_SECRET` **sin condición**, en
+`al_iniciar()`, sin importar el valor de `DEBUG`: vacío o ausente corta el
+boot con exit code distinto de cero antes de aceptar un solo request. El
+bypass por `DEBUG=true` de `verificar_firma_webhook` (`app/meta.py:121`)
+quedó muerto en la práctica — no hay forma de arrancar con el secreto vacío
+para llegar a ejercitarlo.
+
+Lo que **no** cierra esto: `DEBUG=true` sigue cambiando otros
+comportamientos, ver 4.b.
+
+---
+
+## 4.b. Huecos que quedaron de la validación de arranque
+
+Salieron de la auditoría del branch `feat/validacion-config-arranque`, antes
+de mergearlo. Ninguno es un bug de lo implementado: son casos que la spec no
+cubrió y que siguen abiertos. Comparten la misma forma que el problema que
+esa spec vino a resolver — **el server levanta perfecto y el síntoma es
+silencioso**, que en esta arquitectura (sin bandeja de entrada, con Meta
+llevándose su 200) significa que nadie se entera.
+
+- **`PROVEEDOR_IA=fijo` pasa la validación, y `.env.example` lo trae seteado
+  así.** La motivación de la spec era que, si faltaba la variable, se caía al
+  proveedor `fijo` en silencio. Ahora hay que escribirla — pero el ejemplo que
+  todo el mundo copia dice `fijo`, y el resultado es idéntico: un bot que
+  arranca impecable y le contesta la misma respuesta fija a todos los que
+  escriban. `fijo` es el proveedor de tests, no un modo de producción.
+  Mínimo un `WARNING` ruidoso al arrancar con `fijo`; `PROVEEDORES_VALIDOS`
+  está en `app/validacion_config.py:16`.
+- **`DEBUG=true` no lo valida nada y cambia comportamiento de producción.**
+  Es una elección legítima en desarrollo, así que no se puede prohibir sin
+  más — pero en `app/main.py:359`, ante un error transitorio del proveedor de
+  IA, con `DEBUG=true` se manda el mensaje técnico y **no se escala**: el
+  usuario recibe un error y nadie se entera. Con `DEBUG=false` se escala, que
+  es lo correcto. Queda como lo único del checklist de deploy que hay que
+  revisar a mano.
+- **`app/config.py` revienta en el import, antes de que `validar_config()`
+  pueda hablar.** `ZoneInfo(...)` (línea 57) y los `int(...)` (58-62) se
+  evalúan al construir el `Config`, o sea antes del startup. Un `TIMEZONE`
+  mal escrito da un `ZoneInfoNotFoundError` pelado; `HISTORIAL_MAX_MENSAJES`
+  con texto, un `ValueError`. El caso realista es
+  **`LIMITE_MENSAJES_HORA=` definida pero vacía** en el panel de Render:
+  `os.getenv` devuelve `""`, no `None`, así que el default nunca aplica y el
+  proceso muere con `invalid literal for int() with base 10: ''`. Los tres
+  salen fuera de `logger("bot")`, sin acumulación y sin la línea de resumen —
+  justo lo que la spec quería evitar. Lo que corresponde es parsear esos
+  valores dentro de `validar_config()`, o al menos tolerar el string vacío
+  como ausente en `_cargar_config`.
+
+Los tres verificados corriendo un `uvicorn` real, no leyendo el código.
 
 ---
 
@@ -445,6 +490,12 @@ que redescubrirlas.
 - **Feriados.** Se tratan como día hábil, así que un 25 de mayo a las 11 el bot
   promete que responden "en breve". Está declarado como deuda conocida en el
   spec y anotado en `app/mensajes.py`.
+- **El docstring de `SessionLocal` nombra módulos que no la importan.**
+  `app/db.py:74` dice que hacen `from app.db import SessionLocal` "main.py,
+  limite.py, historial.py, scripts, tests". `app/limite.py` y
+  `app/historial.py` no la importan: reciben `db: Session` por parámetro. El
+  razonamiento del docstring (por qué `SessionLocal` es una función y no el
+  `sessionmaker` directo) sigue siendo correcto, solo está mal la lista.
 - **`@app.on_event` está deprecado** en la versión de FastAPI del proyecto
   (`app/main.py`); la suite lo muestra como `DeprecationWarning` en cada
   corrida. Lo que corresponde es un handler de `lifespan`. Funciona igual, pero
@@ -499,8 +550,16 @@ que redescubrirlas.
     `resultado.escalar` en `False`, entra en la rama "el modelo devolvió una
     respuesta vacía sin escalar" de `main.py` (línea ~321) — manda
     `MENSAJE_ERROR_GENERICO` y corre el fallback `escalar_a_humano` interno.
-    No hay silencio; ya está cubierto y probado indirectamente (no hace falta
-    tocar nada acá).
+    **Esto era falso y se arregló el 2026-09-15.** Ese fallback escalaba sin
+    mirar `ESCALAMIENTO_HABILITADO`: prendía `modo_humano` —dejando al número
+    sin respuesta del bot para siempre— y le prometía al usuario una persona
+    que, sin bandeja de entrada, no existe. Pasó en producción con un mensaje
+    real. Ahora `escalar_a_humano` (`app/main.py`) corta con un WARNING si el
+    flag está en false, y los caminos de error mandan
+    `MENSAJE_ERROR_SIN_ESCALAMIENTO`, que deriva al mail de recepción en vez
+    de prometer un humano. Los 14 tests de escalamiento pedían la fixture
+    `escalamiento_activo`: antes pasaban con el flag en false porque nadie lo
+    miraba.
   - **Con texto además del tool call** (p. ej. el modelo escribe "dale, te
     paso con alguien" y en el mismo turno llama a la herramienta): ese texto
     **sí** se envía (`resultado.texto` no está vacío), pero como el tool call

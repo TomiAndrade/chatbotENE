@@ -48,7 +48,7 @@ def test_en_desarrollo_no_escala_y_pide_reintentar(client, meta_enviados, monkey
     assert not AVISOS_DE_ESCALAMIENTO.intersection(textos)
 
 
-def test_en_produccion_escala_como_cualquier_otro_fallo(client, meta_enviados, monkeypatch):
+def test_en_produccion_escala_como_cualquier_otro_fallo(escalamiento_activo, client, meta_enviados, monkeypatch):
     monkeypatch.setattr(config, "debug", False)
     monkeypatch.setattr(main_mod, "generar_respuesta", _reventar_transitorio)
 

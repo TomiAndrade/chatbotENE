@@ -33,6 +33,19 @@ MENSAJE_ERROR_GENERICO = (
     "del equipo para que te contacte."
 )
 
+# Variante de MENSAJE_ERROR_GENERICO para cuando ESCALAMIENTO_HABILITADO=false
+# (ver spec-derivacion.md): sin bandeja de entrada no hay a quién pasarle la
+# conversación, así que prometer "ya avisamos a una persona" es mentirle al
+# usuario. En vez de eso se le da el canal por el que sí lo van a atender.
+#
+# El mail está acá y en prompts/system-prompt.md — si cambia, cambian los dos.
+MAIL_RECEPCION = "recepcion.ene.pctnqn@gmail.com"
+
+MENSAJE_ERROR_SIN_ESCALAMIENTO = (
+    "Perdón, tuvimos un problema para responderte. Probá de nuevo en un rato, "
+    f"o escribinos a {MAIL_RECEPCION} y te respondemos por ahí."
+)
+
 MENSAJE_ERROR_TRANSITORIO = (
     "Perdón, tuvimos un problema técnico. Probá de nuevo en un momento."
 )

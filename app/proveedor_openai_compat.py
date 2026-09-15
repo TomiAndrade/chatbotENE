@@ -48,7 +48,17 @@ from app.respuesta import (
 
 logger = logging.getLogger("proveedor_openai_compat")
 
-MAX_TOKENS_RESPUESTA = 500
+# Techo de seguridad, no el mecanismo para acortar respuestas: de la brevedad
+# se encarga el system prompt (spec-respuestas-cortas.md, regla 3, que pide
+# "margen suficiente para no cortar una respuesta legítima").
+#
+# El margen tiene que contar los tokens de RAZONAMIENTO, que salen del mismo
+# presupuesto que el texto. Medido contra el prompt real (~18.000 tokens) con
+# openai/gpt-5-mini: 448 tokens de razonamiento antes de escribir una sola
+# palabra. Con el techo en 500 la respuesta volvía cortada a mitad de frase
+# (finish_reason "length"), y con nvidia/nemotron-3-ultra-550b-a55b:free
+# volvía directamente vacía.
+MAX_TOKENS_RESPUESTA = 2000
 
 # Instrumentación: separar el tiempo hasta los headers del tiempo hasta tener
 # el cuerpo entero. Importa porque la línea "HTTP Request: ..." que loguea
@@ -178,6 +188,18 @@ def _interpretar_respuesta(cuerpo: dict) -> RespuestaGenerada:
     choices = cuerpo.get("choices") or []
     if not choices:
         return RespuestaGenerada(texto=None, escalar=False, resumen=None)
+
+    # "length" significa que el modelo se quedó sin presupuesto en la mitad:
+    # el texto que sigue abajo está cortado, muchas veces a mitad de frase.
+    # No se descarta (media respuesta es mejor que ninguna, y el usuario puede
+    # repreguntar), pero tiene que quedar en el log: sin esto el bot manda una
+    # frase incompleta y no hay ningún rastro de que pasó algo raro.
+    if choices[0].get("finish_reason") == "length":
+        logger.warning(
+            "La respuesta se cortó por max_tokens (finish_reason=length): el texto va "
+            "incompleto. Revisar MAX_TOKENS_RESPUESTA contra los tokens de razonamiento "
+            "del modelo configurado."
+        )
 
     mensaje = choices[0].get("message") or {}
     texto = mensaje.get("content")
