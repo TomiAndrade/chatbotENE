@@ -225,7 +225,7 @@ def test_secretaria_responde_una_conversacion_ya_escalada_no_le_pone_expiracion(
     assert conversacion.resumen_escalamiento == "ya escaló el modelo"
 
 
-def test_escalar_a_humano_no_se_pierde_si_habia_una_pausa_manual_vencida(client, meta_enviados, monkeypatch, db):
+def test_escalar_a_humano_no_se_pierde_si_habia_una_pausa_manual_vencida(escalamiento_activo, client, meta_enviados, monkeypatch, db):
     """Si había una pausa manual vencida y ahora el modelo decide escalar, el
     escalamiento tiene que ganar: eleva motivo_pausa a ESCALAMIENTO (que no
     expira) con una fecha fresca, no la fecha vieja de la pausa manual — si
@@ -302,7 +302,7 @@ def test_secretaria_responde_mientras_el_modelo_genera_el_bot_no_escribe_encima(
     assert textos == []
 
 
-def test_un_escalamiento_durante_la_pausa_manual_no_se_pierde(client, meta_enviados, monkeypatch):
+def test_un_escalamiento_durante_la_pausa_manual_no_se_pierde(escalamiento_activo, client, meta_enviados, monkeypatch):
     """El otro lado de la misma carrera: si lo que el modelo decide, mientras
     la secretaría responde, es escalar, ese escalamiento tiene que quedar
     registrado igual — resumen, escalada_en y el WARNING — y no perderse

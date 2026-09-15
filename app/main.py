@@ -306,7 +306,23 @@ def escalar_a_humano(db, conversacion: Conversacion, resumen: str | None) -> Non
     no tiene que frenar esto. Si lo frenara, el escalamiento se perdería
     entero — sin resumen, sin escalada_en, sin aviso — y la conversación
     volvería sola al bot cuando la pausa manual expire.
+
+    Con ESCALAMIENTO_HABILITADO=false no hace nada más que loguear: no hay
+    bandeja de entrada donde alguien lea la conversación (spec-derivacion.md),
+    así que prender modo_humano dejaría al usuario esperando a una persona que
+    no va a llegar, y encima el bot no le volvería a contestar nunca más. El
+    chequeo va acá y no en cada llamador a propósito: los caminos de error de
+    `responder` escalaban aunque la herramienta no estuviera ni declarada, que
+    es exactamente el agujero que esto tapa.
     """
+    if not config.escalamiento_habilitado:
+        logger.warning(
+            "No se escala a humano (ESCALAMIENTO_HABILITADO=false) para %s. Motivo que "
+            "lo habría disparado: %s",
+            enmascarar_identificador(conversacion.identificador_externo), resumen,
+        )
+        return
+
     db.refresh(conversacion)
     if _ya_escalada(conversacion):
         logger.info(
@@ -362,6 +378,13 @@ def responder(db, conversacion: Conversacion, mensaje_usuario: Mensaje) -> None:
     `procesar_mensaje_entrante` ya quedó vieja para cuando el modelo
     contesta."""
     identificador = enmascarar_identificador(conversacion.identificador_externo)
+    # MENSAJE_ERROR_GENERICO dice "ya avisamos a una persona del equipo": solo
+    # es verdad si el escalamiento está habilitado.
+    mensaje_de_error = (
+        mensajes.MENSAJE_ERROR_GENERICO
+        if config.escalamiento_habilitado
+        else mensajes.MENSAJE_ERROR_SIN_ESCALAMIENTO
+    )
 
     cronometro_historial = Cronometro()
     historial = construir_historial(db, conversacion, mensaje_usuario)
@@ -386,7 +409,7 @@ def responder(db, conversacion: Conversacion, mensaje_usuario: Mensaje) -> None:
         if config.debug:
             enviar_y_guardar(db, conversacion, mensajes.MENSAJE_ERROR_TRANSITORIO)
         else:
-            enviar_y_guardar(db, conversacion, mensajes.MENSAJE_ERROR_GENERICO)
+            enviar_y_guardar(db, conversacion, mensaje_de_error)
             escalar_a_humano(
                 db, conversacion,
                 resumen="Error automático: error transitorio del proveedor de IA.",
@@ -397,7 +420,7 @@ def responder(db, conversacion: Conversacion, mensaje_usuario: Mensaje) -> None:
         logger.exception(
             "Falló la llamada al modelo para %s", enmascarar_identificador(conversacion.identificador_externo),
         )
-        enviar_y_guardar(db, conversacion, mensajes.MENSAJE_ERROR_GENERICO)
+        enviar_y_guardar(db, conversacion, mensaje_de_error)
         escalar_a_humano(db, conversacion, resumen="Error automático: no se pudo generar una respuesta.")
         return
 
@@ -408,7 +431,7 @@ def responder(db, conversacion: Conversacion, mensaje_usuario: Mensaje) -> None:
             "El modelo devolvió una respuesta vacía sin escalar para %s",
             enmascarar_identificador(conversacion.identificador_externo),
         )
-        enviar_y_guardar(db, conversacion, mensajes.MENSAJE_ERROR_GENERICO)
+        enviar_y_guardar(db, conversacion, mensaje_de_error)
         escalar_a_humano(db, conversacion, resumen="Error automático: el modelo no generó una respuesta.")
         return
 

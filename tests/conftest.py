@@ -40,6 +40,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import models
+from app.config import config
 from app.db import SessionLocal, crear_engine, init_db
 from app.main import app, meta_client
 
@@ -69,6 +70,19 @@ def _base_limpia():
         db.commit()
     finally:
         db.close()
+
+
+@pytest.fixture
+def escalamiento_activo(monkeypatch):
+    """Prende ESCALAMIENTO_HABILITADO para un test.
+
+    El default de la suite es `false`, igual que producción (ver
+    spec-derivacion.md): hoy no hay bandeja de entrada y el bot no escala.
+    Los tests que ejercitan el escalamiento lo piden explícito con esta
+    fixture — sin ella pasaban igual, porque `main.py` escalaba sin mirar el
+    flag, y ese agujero es justamente el que arreglamos.
+    """
+    monkeypatch.setattr(config, "escalamiento_habilitado", True)
 
 
 @pytest.fixture

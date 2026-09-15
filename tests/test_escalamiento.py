@@ -44,7 +44,7 @@ def _conversacion_de_prueba() -> Conversacion:
         db.close()
 
 
-def test_escalar_marca_modo_humano_guarda_resumen_y_avisa(client, meta_enviados, monkeypatch):
+def test_escalar_marca_modo_humano_guarda_resumen_y_avisa(escalamiento_activo, client, meta_enviados, monkeypatch):
     monkeypatch.setattr(
         main_mod,
         "generar_respuesta",
@@ -69,7 +69,7 @@ def test_escalar_marca_modo_humano_guarda_resumen_y_avisa(client, meta_enviados,
     assert textos[1] in AVISOS_DE_ESCALAMIENTO
 
 
-def test_despues_de_escalar_el_bot_no_responde_mas(client, meta_enviados, monkeypatch):
+def test_despues_de_escalar_el_bot_no_responde_mas(escalamiento_activo, client, meta_enviados, monkeypatch):
     monkeypatch.setattr(
         main_mod,
         "generar_respuesta",
@@ -83,7 +83,7 @@ def test_despues_de_escalar_el_bot_no_responde_mas(client, meta_enviados, monkey
     assert len(meta_enviados) == cantidad_tras_escalar
 
 
-def test_escalar_sin_texto_solo_manda_el_aviso(client, meta_enviados, monkeypatch):
+def test_escalar_sin_texto_solo_manda_el_aviso(escalamiento_activo, client, meta_enviados, monkeypatch):
     monkeypatch.setattr(
         main_mod,
         "generar_respuesta",
@@ -122,7 +122,7 @@ def _escalar_con_reloj(client, meta_enviados, monkeypatch, instante_utc, wa_mess
     return textos[0]
 
 
-def test_aviso_en_horario_usa_la_hora_del_polo_no_la_del_server(client, meta_enviados, monkeypatch):
+def test_aviso_en_horario_usa_la_hora_del_polo_no_la_del_server(escalamiento_activo, client, meta_enviados, monkeypatch):
     # Martes 19:00 UTC = martes 16:00 en Buenos Aires → dentro del horario de
     # atención. Leído como UTC serían las 19, que está fuera.
     instante = datetime(2026, 7, 28, 19, 0, tzinfo=timezone.utc)
@@ -132,7 +132,7 @@ def test_aviso_en_horario_usa_la_hora_del_polo_no_la_del_server(client, meta_env
     assert aviso == MENSAJE_ESCALAMIENTO_EN_HORARIO
 
 
-def test_aviso_fuera_de_horario_usa_la_hora_del_polo_no_la_del_server(client, meta_enviados, monkeypatch):
+def test_aviso_fuera_de_horario_usa_la_hora_del_polo_no_la_del_server(escalamiento_activo, client, meta_enviados, monkeypatch):
     # Martes 10:00 UTC = martes 07:00 en Buenos Aires → todavía no abrió.
     # Leído como UTC serían las 10, que sí está dentro del horario.
     # (Era 11:00 UTC = 08:00 BA cuando el horario era 9-17; con 8-18 las 8 ya
@@ -144,7 +144,7 @@ def test_aviso_fuera_de_horario_usa_la_hora_del_polo_no_la_del_server(client, me
     assert aviso == MENSAJE_ESCALAMIENTO_FUERA_DE_HORARIO
 
 
-def test_aviso_de_fin_de_semana_avisa_el_horario_de_atencion(client, meta_enviados, monkeypatch):
+def test_aviso_de_fin_de_semana_avisa_el_horario_de_atencion(escalamiento_activo, client, meta_enviados, monkeypatch):
     # Sábado 2026-08-01, 22:00 en Buenos Aires (01:00 UTC del domingo).
     instante = datetime(2026, 8, 2, 1, 0, tzinfo=timezone.utc)
 
@@ -153,7 +153,7 @@ def test_aviso_de_fin_de_semana_avisa_el_horario_de_atencion(client, meta_enviad
     assert aviso == MENSAJE_ESCALAMIENTO_FUERA_DE_HORARIO
 
 
-def test_si_falla_el_envio_del_aviso_el_escalamiento_queda_igual(client, meta_enviados, monkeypatch, caplog):
+def test_si_falla_el_envio_del_aviso_el_escalamiento_queda_igual(escalamiento_activo, client, meta_enviados, monkeypatch, caplog):
     """El commit de modo_humano va antes que el envío del aviso, así que si
     Meta está caído la conversación queda escalada igual. Lo que no puede
     pasar es que eso se pierda: tiene que quedar el WARNING del escalamiento
@@ -184,7 +184,7 @@ def test_si_falla_el_envio_del_aviso_el_escalamiento_queda_igual(client, meta_en
 # --- Carrera entre una respuesta lenta y un escalamiento --------------------
 
 
-def test_el_bot_no_escribe_encima_de_un_humano(meta_enviados, monkeypatch):
+def test_el_bot_no_escribe_encima_de_un_humano(escalamiento_activo, meta_enviados, monkeypatch):
     """Dos mensajes concurrentes del mismo número: el primero tarda en el
     modelo y el segundo escala mientras tanto. Cuando el primero vuelve, la
     conversación ya está en modo humano y su respuesta no tiene que salir.
@@ -228,7 +228,7 @@ def test_el_bot_no_escribe_encima_de_un_humano(meta_enviados, monkeypatch):
     assert textos[0] in AVISOS_DE_ESCALAMIENTO
 
 
-def test_una_carrera_no_pisa_el_resumen_del_primer_escalamiento(meta_enviados, monkeypatch):
+def test_una_carrera_no_pisa_el_resumen_del_primer_escalamiento(escalamiento_activo, meta_enviados, monkeypatch):
     """Si el mensaje lento también quería escalar, el resumen que queda
     guardado es el del escalamiento que llegó primero: pisarlo con el segundo
     le sacaría contexto a quien vaya a atender."""

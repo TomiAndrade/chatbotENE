@@ -11,7 +11,7 @@ import json
 
 from app import main as main_mod
 from app.db import SessionLocal
-from app.mensajes import MENSAJE_ERROR_GENERICO
+from app.mensajes import MENSAJE_ERROR_GENERICO, MENSAJE_ERROR_SIN_ESCALAMIENTO
 from app.models import Conversacion
 from app.respuesta import RespuestaGenerada
 from tests.conftest import TELEFONO_DE_PRUEBA
@@ -39,7 +39,7 @@ def _afirmar_disculpa_y_aviso(meta_enviados) -> None:
     assert textos[1] in AVISOS_DE_ESCALAMIENTO
 
 
-def test_si_la_llamada_al_modelo_falla_se_disculpa_y_escala(client, meta_enviados, monkeypatch):
+def test_si_la_llamada_al_modelo_falla_se_disculpa_y_escala(escalamiento_activo, client, meta_enviados, monkeypatch):
     def _reventar(historial, mensaje_nuevo):
         raise TimeoutError("el modelo tardó demasiado")
 
@@ -55,7 +55,7 @@ def test_si_la_llamada_al_modelo_falla_se_disculpa_y_escala(client, meta_enviado
     _afirmar_disculpa_y_aviso(meta_enviados)
 
 
-def test_respuesta_vacia_sin_escalar_se_trata_como_error(client, meta_enviados, monkeypatch):
+def test_respuesta_vacia_sin_escalar_se_trata_como_error(escalamiento_activo, client, meta_enviados, monkeypatch):
     monkeypatch.setattr(
         main_mod,
         "generar_respuesta",
@@ -72,7 +72,7 @@ def test_respuesta_vacia_sin_escalar_se_trata_como_error(client, meta_enviados, 
     _afirmar_disculpa_y_aviso(meta_enviados)
 
 
-def test_respuesta_de_solo_espacios_sin_escalar_tambien_se_trata_como_error(client, meta_enviados, monkeypatch):
+def test_respuesta_de_solo_espacios_sin_escalar_tambien_se_trata_como_error(escalamiento_activo, client, meta_enviados, monkeypatch):
     """Ver PENDIENTES.md, sección 7: un texto de sólo espacios pasaba el
     chequeo original (`texto is None`) y terminaba enviándose como si fuera
     una respuesta válida, sin escalar."""
@@ -90,3 +90,48 @@ def test_respuesta_de_solo_espacios_sin_escalar_tambien_se_trata_como_error(clie
 
     assert conversacion.modo_humano is True
     _afirmar_disculpa_y_aviso(meta_enviados)
+
+
+# --- Con ESCALAMIENTO_HABILITADO=false (el default de la suite y el de
+# producción hoy, ver spec-derivacion.md) --------------------------------
+#
+# Estos son los que faltaban. Los de arriba pasaban igual con el flag en
+# false, porque `responder` escalaba sin mirarlo: el bot prendía modo_humano
+# —y dejaba de contestarle a ese número para siempre— prometiéndole una
+# persona que no existe, mientras la suite seguía en verde.
+
+
+def test_sin_escalamiento_un_fallo_del_modelo_no_prende_modo_humano(client, meta_enviados, monkeypatch):
+    def _reventar(historial, mensaje_nuevo):
+        raise TimeoutError("el modelo tardó demasiado")
+
+    monkeypatch.setattr(main_mod, "generar_respuesta", _reventar)
+
+    _post_mensaje(client, "wamid.sinescal1", "hola")
+
+    db = SessionLocal()
+    conversacion = db.query(Conversacion).filter_by(canal="whatsapp", identificador_externo=TELEFONO_DE_PRUEBA).one()
+    db.close()
+
+    assert conversacion.modo_humano is False
+    assert conversacion.escalada_en is None
+    assert conversacion.resumen_escalamiento is None
+
+
+def test_sin_escalamiento_se_avisa_sin_prometer_una_persona(client, meta_enviados, monkeypatch):
+    """El texto importa, no la cantidad: MENSAJE_ERROR_GENERICO dice "ya
+    avisamos a una persona del equipo", y sin bandeja de entrada eso es
+    mentira. Tiene que salir la variante que deriva al mail."""
+    monkeypatch.setattr(
+        main_mod,
+        "generar_respuesta",
+        lambda historial, mensaje_nuevo: RespuestaGenerada(texto=None, escalar=False, resumen=None),
+    )
+
+    _post_mensaje(client, "wamid.sinescal2", "hola")
+
+    textos = [texto for _, texto in meta_enviados]
+    assert textos == [MENSAJE_ERROR_SIN_ESCALAMIENTO]
+    assert MENSAJE_ERROR_GENERICO not in textos
+    for texto in textos:
+        assert texto not in AVISOS_DE_ESCALAMIENTO
