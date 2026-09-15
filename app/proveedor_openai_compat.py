@@ -26,6 +26,8 @@ nada específico para activarlo.
 
 import json
 import logging
+import threading
+import time
 
 import httpx
 
@@ -46,6 +48,44 @@ from app.respuesta import (
 
 logger = logging.getLogger("proveedor_openai_compat")
 
+# Instrumentación: separar el tiempo hasta los headers del tiempo hasta tener
+# el cuerpo entero. Importa porque la línea "HTTP Request: ..." que loguea
+# httpx NO marca el final de la llamada: httpx la escribe apenas vuelven los
+# headers (Client._send_single_request, httpx 0.28.1) y recién después lee el
+# cuerpo, adentro del mismo post(). Un proveedor que manda los headers
+# enseguida y después se toma diez segundos para generar el texto deja todo
+# ese tiempo escondido entre esa línea y la siguiente del log.
+#
+# El hook de "response" de httpx corre justo en ese punto intermedio
+# (Client._send_handling_redirects, antes del response.read() de send()), así
+# que alcanza para marcarlo sin cambiar a una lectura en streaming.
+#
+# El instante va en un threading.local y no en una variable del módulo porque
+# el httpx.Client es uno solo y compartido: las background tasks de Starlette
+# corren en paralelo en un threadpool, y dos mensajes simultáneos se pisarían
+# la marca.
+_medicion = threading.local()
+
+
+def _marcar_llegada_de_headers(respuesta: httpx.Response) -> None:
+    _medicion.headers_en = time.perf_counter()
+
+
+def _loguear_tiempos_http(inicio: float, fin: float) -> None:
+    ms_total = (fin - inicio) * 1000
+    headers_en = getattr(_medicion, "headers_en", None)
+    if headers_en is None:
+        # Sin hook (pasa en los tests, que reemplazan el cliente por uno con
+        # MockTransport): se loguea el total igual, sin el desglose.
+        logger.info("TIEMPOS modelo | HTTP completo: %.0f ms", ms_total)
+        return
+    ms_headers = (headers_en - inicio) * 1000
+    logger.info(
+        "TIEMPOS modelo | headers: %.0f ms | cuerpo: %.0f ms | HTTP completo: %.0f ms",
+        ms_headers, ms_total - ms_headers, ms_total,
+    )
+
+
 def _herramientas() -> list[dict]:
     """Vacía si ESCALAMIENTO_HABILITADO=false (ver specs/spec-derivacion.md):
     sin bandeja de entrada, no hay quién reciba un escalamiento."""
@@ -65,7 +105,10 @@ def _herramientas() -> list[dict]:
 
 class ProveedorOpenAICompat(ProveedorRespuesta):
     def __init__(self) -> None:
-        self._http = httpx.Client(timeout=TIMEOUT_SEGUNDOS)
+        self._http = httpx.Client(
+            timeout=TIMEOUT_SEGUNDOS,
+            event_hooks={"response": [_marcar_llegada_de_headers]},
+        )
         self._url = f"{config.base_url.rstrip('/')}/chat/completions"
 
     def generar_respuesta(self, historial: list[Mensaje], mensaje_nuevo: str) -> RespuestaGenerada:
@@ -77,6 +120,10 @@ class ProveedorOpenAICompat(ProveedorRespuesta):
         return _interpretar_respuesta(cuerpo)
 
     def _llamar(self, mensajes: list[dict]) -> dict:
+        # Se limpia antes de cada intento: si este post() falla sin llegar a
+        # los headers, no queremos medir contra la marca del intento anterior.
+        _medicion.headers_en = None
+        inicio = time.perf_counter()
         respuesta = self._http.post(
             self._url,
             headers={
@@ -89,6 +136,9 @@ class ProveedorOpenAICompat(ProveedorRespuesta):
                 "tools": _herramientas(),
             },
         )
+        # Antes del raise_for_status: un 429 o un 5xx también tardan, y ese
+        # tiempo cuenta igual para el presupuesto.
+        _loguear_tiempos_http(inicio, time.perf_counter())
 
         try:
             respuesta.raise_for_status()

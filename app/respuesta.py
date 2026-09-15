@@ -17,6 +17,7 @@ from typing import Callable, TypeVar
 
 from app.config import config
 from app.models import Mensaje
+from app.tiempos import Cronometro
 
 logger = logging.getLogger("respuesta")
 
@@ -58,11 +59,24 @@ def con_un_reintento(func: Callable[[], T]) -> T:
     largo empeora la experiencia más de lo que la salva."""
     ultimo_error: Exception | None = None
     for intento in range(1, MAX_INTENTOS + 1):
+        # Se mide acá, y no adentro de cada proveedor, porque este es el único
+        # lugar por el que pasan los dos: sirve igual para openai_compat (HTTP
+        # a mano) que para claude (SDK). Un intento que se come el timeout de
+        # TIMEOUT_SEGUNDOS y uno que contesta rápido se distinguen a simple
+        # vista en el log.
+        cronometro = Cronometro()
         try:
-            return func()
+            resultado = func()
+            logger.info(
+                "TIEMPOS modelo | intento %s/%s ok en %.0f ms", intento, MAX_INTENTOS, cronometro.ms(),
+            )
+            return resultado
         except Exception as error:
             ultimo_error = error
-            logger.warning("Intento %s/%s de llamar al modelo falló: %s", intento, MAX_INTENTOS, error)
+            logger.warning(
+                "Intento %s/%s de llamar al modelo falló después de %.0f ms: %s",
+                intento, MAX_INTENTOS, cronometro.ms(), error,
+            )
     assert ultimo_error is not None
     raise ultimo_error
 

@@ -64,6 +64,7 @@ from app.limite import mensajes_ultima_hora
 from app.meta import MetaClient, verificar_challenge, verificar_firma_webhook
 from app.models import CANAL_WHATSAPP, Conversacion, Mensaje, MotivoPausa, RolMensaje
 from app.respuesta import ErrorTransitorioProveedor, generar_respuesta
+from app.tiempos import Cronometro
 from app.validacion_config import ConfigInvalida, resumen_config, validar_config
 
 class _FormatterUTC(logging.Formatter):
@@ -260,11 +261,24 @@ def enviar_y_guardar(
         )
         return False
 
+    # Mide la llamada entera, reintentos y esperas de backoff incluidos (ver
+    # MAX_REINTENTOS en app/meta.py): es lo que espera el usuario del otro
+    # lado, no lo que tarda un intento suelto. Si hubo reintentos, quedan a la
+    # vista en los WARNING que loguea el cliente de Meta.
+    cronometro_envio = Cronometro()
     try:
         meta_client.enviar_mensaje_texto(identificador_externo, texto)
     except Exception:
+        logger.info(
+            "TIEMPOS %s | envío a Meta (fallo): %.0f ms",
+            enmascarar_identificador(identificador_externo), cronometro_envio.ms(),
+        )
         logger.exception("No se pudo enviar un mensaje a %s", enmascarar_identificador(identificador_externo))
         return False
+    logger.info(
+        "TIEMPOS %s | envío a Meta: %.0f ms",
+        enmascarar_identificador(identificador_externo), cronometro_envio.ms(),
+    )
 
     mensaje_bot = Mensaje(
         conversacion_id=conversacion.id,
@@ -347,11 +361,24 @@ def responder(db, conversacion: Conversacion, mensaje_usuario: Mensaje) -> None:
     de la base justo antes de actuar. La lectura que hizo
     `procesar_mensaje_entrante` ya quedó vieja para cuando el modelo
     contesta."""
-    historial = construir_historial(db, conversacion, mensaje_usuario)
+    identificador = enmascarar_identificador(conversacion.identificador_externo)
 
+    cronometro_historial = Cronometro()
+    historial = construir_historial(db, conversacion, mensaje_usuario)
+    logger.info(
+        "TIEMPOS %s | historial: %.0f ms (%s mensajes)",
+        identificador, cronometro_historial.ms(), len(historial),
+    )
+
+    # De punta a punta: incluye el reintento de con_un_reintento, la lectura
+    # completa del cuerpo de la respuesta y el parseo, no solo el ida y vuelta
+    # HTTP hasta los headers. El desglose por intento lo loguea
+    # `con_un_reintento`, y el de headers vs. cuerpo el proveedor.
+    cronometro_modelo = Cronometro()
     try:
         resultado = generar_respuesta(historial=historial, mensaje_nuevo=mensaje_usuario.contenido)
     except ErrorTransitorioProveedor as error:
+        logger.info("TIEMPOS %s | modelo (fallo transitorio): %.0f ms", identificador, cronometro_modelo.ms())
         logger.warning(
             "Error transitorio del proveedor de IA para %s: %s",
             enmascarar_identificador(conversacion.identificador_externo), error,
@@ -366,12 +393,15 @@ def responder(db, conversacion: Conversacion, mensaje_usuario: Mensaje) -> None:
             )
         return
     except Exception:
+        logger.info("TIEMPOS %s | modelo (fallo): %.0f ms", identificador, cronometro_modelo.ms())
         logger.exception(
             "Falló la llamada al modelo para %s", enmascarar_identificador(conversacion.identificador_externo),
         )
         enviar_y_guardar(db, conversacion, mensajes.MENSAJE_ERROR_GENERICO)
         escalar_a_humano(db, conversacion, resumen="Error automático: no se pudo generar una respuesta.")
         return
+
+    logger.info("TIEMPOS %s | modelo (punta a punta): %.0f ms", identificador, cronometro_modelo.ms())
 
     if (not resultado.texto or not resultado.texto.strip()) and not resultado.escalar:
         logger.error(
@@ -407,8 +437,13 @@ def procesar_mensaje_entrante(identificador_externo: str, wa_message_id: str, co
     `identificador_externo` ni `wa_message_id`, y sin que quede registrado
     como el error de negocio que es. El mensaje del usuario se pierde en
     silencio: Meta ya recibió el 200 y no reintenta."""
+    # Arranca antes de SessionLocal() a propósito: pedir la sesión puede
+    # implicar abrir una conexión nueva contra Postgres, y eso también es
+    # tiempo que el usuario espera.
+    cronometro_total = Cronometro()
     db = SessionLocal()
     try:
+        cronometro_guardado = Cronometro()
         ya_existe = db.query(Mensaje).filter_by(wa_message_id=wa_message_id).first()
         if ya_existe is not None:
             logger.info(
@@ -440,6 +475,11 @@ def procesar_mensaje_entrante(identificador_externo: str, wa_message_id: str, co
             )
             return
 
+        logger.info(
+            "TIEMPOS %s | guardado del mensaje entrante: %.0f ms",
+            enmascarar_identificador(identificador_externo), cronometro_guardado.ms(),
+        )
+
         pausado = _pausa_vigente(conversacion, datetime.now(timezone.utc))
         logger.info(
             "Mensaje de %s guardado (pausado=%s): %s",
@@ -469,6 +509,14 @@ def procesar_mensaje_entrante(identificador_externo: str, wa_message_id: str, co
             exc_info=True,
         )
     finally:
+        # En el finally para que salga por todos los caminos, incluidos los
+        # que cortan antes de responder (duplicado, pausa, límite). Lo que no
+        # cierra contra las etapas de arriba se fue en el resto: commits,
+        # relecturas de modo humano, el conteo del límite.
+        logger.info(
+            "TIEMPOS %s | total del procesamiento: %.0f ms",
+            enmascarar_identificador(identificador_externo), cronometro_total.ms(),
+        )
         db.close()
 
 
