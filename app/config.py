@@ -32,6 +32,8 @@ class Config:
     limite_mensajes_hora: int
     pausa_humana_minutos: int
     escalamiento_habilitado: bool
+    crm_habilitado: bool
+    crm_base_url: str
 
 
 def _cargar_config() -> Config:
@@ -68,6 +70,17 @@ def _cargar_config() -> Config:
         # herramienta y modo_humano siguen implementados, solo dejan de
         # ofrecerse al modelo.
         escalamiento_habilitado=os.getenv("ESCALAMIENTO_HABILITADO", "false").lower() == "true",
+        # CRM (panel de conversaciones, ver spec-crm-conversaciones.md).
+        # Apagado por default: el servidor expone el webhook a internet, así
+        # que mientras nadie lo prenda a propósito /crm no existe (404) y
+        # ningún endpoint del CRM responde.
+        crm_habilitado=os.getenv("CRM_HABILITADO", "false").lower() == "true",
+        # La URL pública del panel. De acá sale una sola decisión: si el
+        # panel se sirve por https y entonces la cookie de sesión va con el
+        # flag `Secure` (ver `crm_sobre_https` en app/validacion_config.py).
+        # No se deduce del header Host ni de X-Forwarded-*: eso lo pone quien
+        # manda el request, así que no sirve para decidir nada de seguridad.
+        crm_base_url=os.getenv("CRM_BASE_URL", "").strip().rstrip("/"),
     )
 
 

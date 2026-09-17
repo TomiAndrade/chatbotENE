@@ -83,9 +83,88 @@ def validar_config(config: Config) -> None:
         if _vacio(config.modelo):
             errores.append("MODELO es obligatoria porque PROVEEDOR_IA=claude.")
 
+    errores.extend(_errores_crm(config))
+
     if errores:
         detalle = "\n".join(f"- {error}" for error in errores)
         raise ConfigInvalida(f"Configuración inválida al arrancar:\n{detalle}")
+
+
+HOSTS_LOCALES = frozenset({"localhost", "127.0.0.1", "[::1]"})
+
+
+def _errores_crm(config: Config) -> list[str]:
+    """El CRM viene apagado (`CRM_HABILITADO=false`, el default): con el
+    panel apagado no se registra ninguna de sus rutas (ver app/main.py) y
+    nada de esto se valida, así que quien solo corre el bot no tiene que
+    configurar nada nuevo.
+
+    Prendido, lo único que hace falta configurar es `CRM_BASE_URL`: el login
+    es propio y las cuentas viven en la base, no en variables de entorno
+    (**no hay ninguna contraseña en la config**, ni compartida ni de nadie).
+    Media configuración no arranca — un panel que se sirve por http en
+    producción manda la cookie de sesión sin `Secure`, que es exactamente la
+    falla silenciosa que esta validación existe para evitar
+    (spec-validacion-config-arranque.md).
+
+    Que **haya** al menos una cuenta con la que entrar no se valida acá: eso
+    se sabe recién con la base abierta, y lo avisa `al_iniciar()` con un
+    WARNING después de `init_db()`.
+    """
+    if not config.crm_habilitado:
+        return []
+
+    return _errores_base_url_crm(config)
+
+
+def _errores_base_url_crm(config: Config) -> list[str]:
+    """CRM_BASE_URL es la URL pública del panel. Se configura y no se deduce
+    del request: el header `Host` (o un `X-Forwarded-Host`) lo elige quien
+    manda el request, así que no sirve para decidir si la conexión es segura.
+
+    HTTPS obligatorio, con una sola excepción explícita: desarrollo local
+    (`DEBUG=true` y host localhost). Producción con http queda rechazada,
+    aunque alguien la escriba a propósito: sin https la cookie de sesión y la
+    contraseña del login viajan en claro.
+    """
+    if _vacio(config.crm_base_url):
+        return [
+            "CRM_BASE_URL es obligatoria con CRM_HABILITADO=true "
+            "(p. ej. https://bot.ene.example o http://localhost:8000 en desarrollo)."
+        ]
+
+    partes = urlparse(config.crm_base_url)
+    if partes.scheme not in ("http", "https") or not partes.hostname:
+        return [
+            f"CRM_BASE_URL={config.crm_base_url!r} no es una URL válida: "
+            "tiene que ser http(s)://host[:puerto], sin ruta ni barra final."
+        ]
+    if partes.path:
+        return [f"CRM_BASE_URL={config.crm_base_url!r} no puede tener ruta: solo esquema, host y puerto."]
+
+    if partes.scheme == "https":
+        return []
+    if partes.hostname in HOSTS_LOCALES and config.debug:
+        return []
+    return [
+        f"CRM_BASE_URL={config.crm_base_url!r} usa http. Solo se permite http "
+        "en desarrollo local: host localhost/127.0.0.1 y DEBUG=true. "
+        "En producción el panel necesita https (la cookie de sesión sale con el flag Secure)."
+    ]
+
+
+def crm_sobre_https(config: Config) -> bool:
+    """Si el panel se sirve por https. Decide el flag `Secure` de las
+    cookies: prendido siempre, salvo en el http local que permite
+    `_errores_base_url_crm` — con Secure el navegador descartaría la cookie
+    en http://localhost y no se podría probar nada."""
+    return config.crm_base_url.startswith("https://")
+
+
+def _resumen_crm(config: Config) -> str:
+    """Solo si el panel está prendido. Cuántas cuentas hay no va acá: esto se
+    loguea antes de que exista el engine de la base."""
+    return "activo" if config.crm_habilitado else "apagado"
 
 
 def _host_y_base(database_url: str) -> str:
@@ -109,5 +188,8 @@ def resumen_config(config: Config) -> str:
         f"proveedor_ia={config.proveedor_ia}, modelo={config.modelo or '(sin modelo)'}, "
         f"database={_host_y_base(config.database_url)}, "
         f"meta_api_version={config.meta_api_version}, "
-        f"escalamiento_habilitado={config.escalamiento_habilitado}"
+        f"escalamiento_habilitado={config.escalamiento_habilitado}, "
+        # Del CRM, solo si está prendido. Ni quién tiene cuenta ni cuántas
+        # son: son datos de personas y no hacen falta en el log de arranque.
+        f"crm={_resumen_crm(config)}"
     )

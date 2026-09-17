@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Centro de conversaciones — ENE</title>
+  <link rel="icon" href="/crm/estaticos/logo-ene.png">
+  <link rel="stylesheet" href="/crm/estaticos/crm.css">
+</head>
+<body>
+  <header class="cabecera">
+    <img class="logo" src="/crm/estaticos/logo-ene.png" alt="ENE — Entender Neuquén es Emprender">
+    <h1>Centro de conversaciones</h1>
+    <div class="cabecera-cuenta">
+      <span id="usuario-actual" class="usuario"></span>
+      <button id="salir" type="button" class="boton-plano">Salir</button>
+    </div>
+  </header>
+
+  <p id="error-global" class="barra-error" role="alert" hidden>
+    <span id="error-global-texto"></span>
+    <button id="reintentar" type="button" class="boton-plano">Reintentar</button>
+  </p>
+
+  <main class="layout" data-vista="lista">
+    <!-- Columna izquierda: la lista de conversaciones -->
+    <section class="columna-lista" aria-label="Conversaciones">
+      <div class="filtros" role="group" aria-label="Filtrar conversaciones">
+        <button type="button" class="filtro activo" data-filtro="todas" aria-pressed="true">
+          Todas <span class="conteo" id="conteo-todas"></span>
+        </button>
+        <button type="button" class="filtro" data-filtro="pausadas" aria-pressed="false">
+          Pausadas <span class="conteo conteo-pausadas" id="conteo-pausadas"></span>
+        </button>
+      </div>
+
+      <div id="lista" class="lista" aria-live="polite">
+        <p class="estado-vacio">Cargando conversaciones…</p>
+      </div>
+
+      <button id="cargar-mas" type="button" class="boton-secundario ancho-completo" hidden>
+        Cargar más conversaciones
+      </button>
+    </section>
+
+    <!-- Columna derecha: el historial de la conversación elegida -->
+    <section class="columna-detalle" aria-label="Historial">
+      <div id="sin-seleccion" class="estado-vacio estado-centrado">
+        <p>Elegí una conversación de la lista para ver el historial.</p>
+      </div>
+
+      <article id="detalle" hidden>
+        <header class="detalle-cabecera">
+          <button id="volver" type="button" class="boton-plano volver">← Conversaciones</button>
+          <div class="detalle-contacto">
+            <h2 id="contacto"></h2>
+            <p id="contacto-meta" class="meta"></p>
+          </div>
+          <div class="detalle-acciones">
+            <span id="estado-chip" class="chip"></span>
+            <button id="reactivar" type="button" class="boton-primario" hidden>Reactivar bot</button>
+          </div>
+        </header>
+
+        <div id="aviso-pausa" class="aviso-pausa" role="status" hidden></div>
+        <p id="aviso-reactivado" class="aviso-ok" role="status" hidden></p>
+
+        <div id="hilo" class="hilo">
+          <button id="cargar-anteriores" type="button" class="boton-secundario" hidden>
+            Cargar mensajes anteriores
+          </button>
+          <ol id="mensajes" class="mensajes"></ol>
+        </div>
+      </article>
+    </section>
+  </main>
+
+  <script src="/crm/estaticos/panel.js"></script>
+</body>
+</html>

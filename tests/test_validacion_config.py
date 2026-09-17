@@ -13,7 +13,12 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from app.config import Config
-from app.validacion_config import ConfigInvalida, resumen_config, validar_config
+from app.validacion_config import (
+    ConfigInvalida,
+    crm_sobre_https,
+    resumen_config,
+    validar_config,
+)
 
 
 def _config_valida(**overrides) -> Config:
@@ -41,8 +46,21 @@ def _config_valida(**overrides) -> Config:
         limite_mensajes_hora=30,
         pausa_humana_minutos=120,
         escalamiento_habilitado=False,
+        crm_habilitado=False,
+        crm_base_url="",
     )
     return replace(base, **overrides)
+
+
+def _config_con_crm(**overrides) -> Config:
+    """Una config con el panel prendido y bien configurado. Cada test de CRM
+    rompe una cosa sobre esta base."""
+    base = dict(
+        crm_habilitado=True,
+        crm_base_url="https://bot.ene.example",
+    )
+    base.update(overrides)
+    return _config_valida(**base)
 
 
 def _mensaje_error(config: Config) -> str:
@@ -227,3 +245,70 @@ def test_resumen_incluye_lo_pedido_por_la_spec():
     assert "bot_prod" in resumen
     assert "v23.0" in resumen
     assert "True" in resumen
+
+
+# --- CRM (panel de conversaciones) ---------------------------------------
+#
+# El CRM viene apagado (CRM_HABILITADO=false): apagado no se registra ninguna
+# de sus rutas y nada de esto se valida. Prendido, lo único obligatorio es
+# CRM_BASE_URL — el login es propio y las cuentas viven en la base, así que
+# no hay ninguna credencial del panel en la config.
+
+
+def test_con_el_crm_apagado_la_validacion_no_se_queja():
+    """El default tiene que seguir siendo válido: quien solo corre el bot no
+    necesita configurar nada nuevo."""
+    validar_config(_config_valida(crm_habilitado=False))
+
+
+def test_crm_bien_configurado_es_valido():
+    validar_config(_config_con_crm())
+
+
+def test_falta_la_base_url_del_crm():
+    mensaje = _mensaje_error(_config_con_crm(crm_base_url=""))
+    assert "CRM_BASE_URL" in mensaje
+
+
+def test_produccion_con_http_no_arranca():
+    """Sobre http la cookie de sesión no puede salir con el flag Secure, y la
+    contraseña del login viajaría en claro. Solo se permite en local."""
+    mensaje = _mensaje_error(_config_con_crm(crm_base_url="http://bot.ene.example", debug=False))
+    assert "CRM_BASE_URL" in mensaje
+    assert "https" in mensaje
+
+
+def test_http_en_localhost_con_debug_si_arranca():
+    """La única excepción, explícita: desarrollo local."""
+    validar_config(_config_con_crm(crm_base_url="http://localhost:8000", debug=True))
+
+
+def test_http_en_localhost_sin_debug_no_arranca():
+    """Localhost solo no alcanza: `DEBUG=false` es producción."""
+    mensaje = _mensaje_error(_config_con_crm(crm_base_url="http://localhost:8000", debug=False))
+    assert "CRM_BASE_URL" in mensaje
+
+
+def test_la_base_url_no_puede_tener_ruta():
+    mensaje = _mensaje_error(_config_con_crm(crm_base_url="https://bot.ene.example/panel"))
+    assert "CRM_BASE_URL" in mensaje
+
+
+def test_una_base_url_que_no_es_url_no_arranca():
+    mensaje = _mensaje_error(_config_con_crm(crm_base_url="bot.ene.example"))
+    assert "CRM_BASE_URL" in mensaje
+
+
+def test_crm_sobre_https_decide_el_flag_secure():
+    assert crm_sobre_https(_config_con_crm()) is True
+    assert crm_sobre_https(_config_con_crm(crm_base_url="http://localhost:8000", debug=True)) is False
+
+
+def test_el_resumen_dice_si_el_crm_esta_prendido():
+    """Prendido o apagado y nada más: quién tiene cuenta son datos de
+    personas y no hacen falta en el log de arranque."""
+    prendido = resumen_config(_config_con_crm())
+    apagado = resumen_config(_config_valida())
+
+    assert "crm=activo" in prendido
+    assert "crm=apagado" in apagado

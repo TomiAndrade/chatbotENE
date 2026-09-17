@@ -1,0 +1,621 @@
+/* Estilos del CRM de ENE.
+ *
+ * Los colores salen de la marca real, no de una invención:
+ *  - el cian #00DFF5 y el verde #7EEE9A son los del degradé de la "N" del
+ *    logo oficial (estaticos/logo-ene.png, muestreado del PNG);
+ *  - el naranja #E1522C es el acento cálido de ENE que ya usa el sitio del
+ *    IA LAB (IALAB-WEB/WEB-IALAB-main/css/shared.css, --ene-orange).
+ *
+ * El degradé cian → verde se usa como firma (la línea bajo el encabezado, el
+ * borde de la conversación elegida) y no como fondo de áreas grandes: el
+ * panel es para leer conversaciones, así que el papel es blanco y el color
+ * marca estado, no decora.
+ *
+ * Tipografía del sistema, sin fuente externa: el panel tiene que abrir igual
+ * aunque el servidor no tenga salida a internet.
+ */
+
+:root {
+  --ene-cian: #00DFF5;
+  --ene-verde: #7EEE9A;
+  --ene-naranja: #E1522C;
+  --degrade-ene: linear-gradient(90deg, var(--ene-cian) 0%, var(--ene-verde) 100%);
+
+  --fondo: #F4F7F8;
+  --papel: #FFFFFF;
+  --papel-suave: #FAFCFC;
+  --texto: #14222A;
+  --texto-suave: #5A6E78;
+  --borde: #E1E8EB;
+  --borde-fuerte: #CBD6DB;
+
+  /* Estados. Los pares texto/fondo están elegidos para pasar contraste AA
+     con texto chico (>= 4.5:1), no por cómo quedan. */
+  --pausa-fondo: #FFF4EC;
+  --pausa-borde: #F6C7AE;
+  --pausa-texto: #8F3310;
+  --activo-fondo: #EAFAF3;
+  --activo-borde: #B5E5D3;
+  --activo-texto: #0B6046;
+  --error-fondo: #FEF1F1;
+  --error-borde: #F3C2C2;
+  --error-texto: #A11A1A;
+
+  --burbuja-usuario: #FFFFFF;
+  --burbuja-bot: #EDFBF7;
+  --burbuja-bot-borde: #C4EDE0;
+  --burbuja-humano: #FFF8E8;
+  --burbuja-humano-borde: #F0DCA9;
+
+  --radio: 12px;
+  --radio-chico: 8px;
+  --sombra: 0 1px 2px rgba(20, 34, 42, 0.05);
+  --alto-cabecera: 64px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--fondo);
+  color: var(--texto);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: -0.01em; }
+
+button { font: inherit; }
+
+/* ---------- Botones ---------- */
+
+.boton-primario {
+  background: var(--texto);
+  color: #FFFFFF;
+  border: 1px solid var(--texto);
+  border-radius: var(--radio-chico);
+  padding: 9px 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 120ms ease;
+}
+.boton-primario:hover:not(:disabled) { opacity: 0.88; }
+.boton-primario:disabled { opacity: 0.55; cursor: progress; }
+
+.boton-secundario {
+  background: var(--papel);
+  color: var(--texto);
+  border: 1px solid var(--borde-fuerte);
+  border-radius: var(--radio-chico);
+  padding: 8px 14px;
+  cursor: pointer;
+}
+.boton-secundario:hover { background: var(--papel-suave); }
+
+.boton-plano {
+  background: none;
+  border: none;
+  color: var(--texto-suave);
+  padding: 6px 8px;
+  border-radius: var(--radio-chico);
+  cursor: pointer;
+}
+.boton-plano:hover { background: rgba(20, 34, 42, 0.06); color: var(--texto); }
+
+.ancho-completo { width: 100%; margin-top: 8px; }
+
+:focus-visible {
+  outline: 2px solid #0E8FA8;
+  outline-offset: 2px;
+}
+
+/* El atributo `hidden` tiene que ganar siempre.
+ *
+ * El navegador lo aplica con `[hidden] { display: none }`, que es una regla
+ * de su hoja de estilos y pierde contra cualquier regla nuestra que fije
+ * `display`. Eso ya pasó de verdad: `.barra-error` fija `display: flex`, así
+ * que la barra de error quedaba visible —vacía, con el botón "Reintentar"
+ * al costado— aunque el JavaScript le pusiera `hidden`.
+ *
+ * Va con `!important` y no como `.barra-error[hidden]` a propósito. Sin él
+ * hay que acordarse de agregar una excepción por cada clase nueva que fije
+ * `display`, y el día que alguien se olvide el síntoma es un cartel que
+ * aparece solo. Con esto, `hidden` significa oculto en todo el panel y no
+ * hay nada que recordar.
+ */
+[hidden] {
+  display: none !important;
+}
+
+/* ---------- Pantalla de entrar ---------- */
+
+.pantalla-centrada {
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.tarjeta {
+  width: 100%;
+  max-width: 420px;
+  background: var(--papel);
+  border: 1px solid var(--borde);
+  border-radius: 16px;
+  box-shadow: 0 10px 30px rgba(20, 34, 42, 0.07);
+  padding: 32px 28px 24px;
+  position: relative;
+  overflow: hidden;
+  text-align: left;
+}
+.tarjeta::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 4px;
+  background: var(--degrade-ene);
+}
+
+.logo-tarjeta { width: 168px; height: auto; display: block; margin-bottom: 20px; }
+
+.tarjeta h1 { font-size: 20px; }
+.subtitulo { color: var(--texto-suave); margin: 6px 0 22px; font-size: 14px; }
+
+.pie-tarjeta {
+  color: var(--texto-suave);
+  font-size: 12.5px;
+  margin: 18px 0 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--borde);
+}
+
+/* Los campos del formulario de entrar. El <label> envuelve al <input>, así
+   que tocar el texto enfoca el campo — en celular eso es la diferencia entre
+   pegarle o no. */
+.campo {
+  display: block;
+  margin-bottom: 14px;
+}
+.campo > span {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--texto);
+}
+.campo input {
+  width: 100%;
+  box-sizing: border-box;
+  /* 16px y no menos: abajo de 16 el navegador de iOS hace zoom al enfocar un
+     campo y deja la pantalla corrida. */
+  font: inherit;
+  font-size: 16px;
+  padding: 11px 12px;
+  color: var(--texto);
+  background: var(--papel);
+  border: 1px solid var(--borde-fuerte);
+  border-radius: var(--radio-chico);
+}
+.campo input:focus {
+  border-color: #0E8FA8;
+}
+
+.tarjeta .boton-primario,
+.tarjeta .boton-secundario {
+  display: block;
+  text-align: center;
+  text-decoration: none;
+}
+
+.error {
+  background: var(--error-fondo);
+  border: 1px solid var(--error-borde);
+  color: var(--error-texto);
+  border-radius: var(--radio-chico);
+  padding: 10px 12px;
+  margin: 0 0 16px;
+  font-size: 14px;
+}
+
+/* ---------- Encabezado ---------- */
+
+.cabecera {
+  height: var(--alto-cabecera);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 20px;
+  background: var(--papel);
+  border-bottom: 1px solid var(--borde);
+  position: relative;
+}
+.cabecera::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; bottom: -1px;
+  height: 2px;
+  background: var(--degrade-ene);
+}
+
+.cabecera .logo { height: 26px; width: auto; }
+
+.cabecera h1 {
+  font-size: 16px;
+  font-weight: 600;
+  padding-left: 16px;
+  border-left: 1px solid var(--borde);
+  color: var(--texto);
+}
+
+.cabecera-cuenta {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.usuario { color: var(--texto-suave); font-size: 13px; }
+
+/* ---------- Barra de error global ---------- */
+
+.barra-error {
+  margin: 0;
+  padding: 10px 20px;
+  background: var(--error-fondo);
+  border-bottom: 1px solid var(--error-borde);
+  color: var(--error-texto);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 14px;
+}
+.barra-error .boton-plano { color: var(--error-texto); margin-left: auto; }
+
+/* ---------- Layout ---------- */
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(300px, 360px) 1fr;
+  height: calc(100% - var(--alto-cabecera));
+  min-height: 0;
+}
+
+.columna-lista {
+  background: var(--papel);
+  border-right: 1px solid var(--borde);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 12px;
+}
+
+.columna-detalle {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ---------- Filtros ---------- */
+
+.filtros {
+  display: flex;
+  gap: 6px;
+  padding: 2px;
+  background: var(--fondo);
+  border-radius: var(--radio);
+  margin-bottom: 12px;
+}
+
+.filtro {
+  flex: 1;
+  background: none;
+  border: none;
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 14px;
+  color: var(--texto-suave);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.filtro.activo {
+  background: var(--papel);
+  color: var(--texto);
+  font-weight: 600;
+  box-shadow: var(--sombra);
+}
+
+.conteo {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--texto-suave);
+  background: rgba(20, 34, 42, 0.07);
+  border-radius: 999px;
+  padding: 1px 7px;
+  min-width: 20px;
+}
+.conteo-pausadas:not(:empty) {
+  background: var(--pausa-fondo);
+  color: var(--pausa-texto);
+}
+
+/* ---------- Lista de conversaciones ---------- */
+
+.lista {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0 -4px;
+  padding: 0 4px;
+}
+
+.item {
+  width: 100%;
+  text-align: left;
+  background: var(--papel);
+  border: 1px solid var(--borde);
+  border-left: 3px solid transparent;
+  border-radius: var(--radio);
+  padding: 12px 14px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  display: block;
+}
+.item:hover { background: var(--papel-suave); }
+.item.elegida {
+  border-color: var(--borde-fuerte);
+  border-left-color: var(--ene-cian);
+  background: var(--papel-suave);
+}
+
+.item-fila {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.item-identificador {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.item-hora {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--texto-suave);
+  white-space: nowrap;
+}
+
+.item-previa {
+  margin: 4px 0 8px;
+  color: var(--texto-suave);
+  font-size: 13.5px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.item-previa .quien { color: var(--texto); font-weight: 600; }
+
+/* ---------- Chips de estado ---------- */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 3px 10px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.chip::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.chip-activo {
+  background: var(--activo-fondo);
+  border-color: var(--activo-borde);
+  color: var(--activo-texto);
+}
+.chip-pausado {
+  background: var(--pausa-fondo);
+  border-color: var(--pausa-borde);
+  color: var(--pausa-texto);
+}
+
+/* ---------- Detalle ---------- */
+
+.detalle-cabecera {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 24px;
+  background: var(--papel);
+  border-bottom: 1px solid var(--borde);
+}
+
+.detalle-contacto h2 {
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+}
+.meta { margin: 2px 0 0; font-size: 12.5px; color: var(--texto-suave); }
+
+.detalle-acciones {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.volver { display: none; }
+
+.aviso-pausa {
+  margin: 16px 24px 0;
+  padding: 12px 14px;
+  background: var(--pausa-fondo);
+  border: 1px solid var(--pausa-borde);
+  border-radius: var(--radio);
+  color: var(--pausa-texto);
+  font-size: 14px;
+}
+.aviso-pausa .titulo { font-weight: 600; display: block; margin-bottom: 2px; }
+.aviso-pausa .detalle { color: #6F2A0D; display: block; margin-top: 6px; }
+.aviso-pausa .resumen {
+  display: block;
+  margin-top: 6px;
+  padding-left: 10px;
+  border-left: 2px solid var(--pausa-borde);
+  color: #6F2A0D;
+}
+
+.aviso-ok {
+  margin: 16px 24px 0;
+  padding: 10px 14px;
+  background: var(--activo-fondo);
+  border: 1px solid var(--activo-borde);
+  border-radius: var(--radio);
+  color: var(--activo-texto);
+  font-size: 14px;
+}
+
+/* ---------- Hilo de mensajes ---------- */
+
+.hilo {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px 24px 28px;
+  scroll-behavior: auto;
+}
+
+.mensajes { list-style: none; margin: 0; padding: 0; }
+
+.separador-dia {
+  text-align: center;
+  font-size: 12px;
+  color: var(--texto-suave);
+  margin: 18px 0 12px;
+}
+.separador-dia span {
+  background: var(--papel);
+  border: 1px solid var(--borde);
+  border-radius: 999px;
+  padding: 3px 12px;
+}
+
+.mensaje {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 12px;
+  max-width: min(640px, 78%);
+}
+.mensaje-usuario { align-items: flex-start; margin-right: auto; }
+.mensaje-bot, .mensaje-humano { align-items: flex-end; margin-left: auto; }
+
+.burbuja {
+  border: 1px solid var(--borde);
+  border-radius: 14px;
+  padding: 10px 14px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--burbuja-usuario);
+  box-shadow: var(--sombra);
+}
+.mensaje-usuario .burbuja { border-bottom-left-radius: 4px; }
+.mensaje-bot .burbuja {
+  background: var(--burbuja-bot);
+  border-color: var(--burbuja-bot-borde);
+  border-bottom-right-radius: 4px;
+}
+.mensaje-humano .burbuja {
+  background: var(--burbuja-humano);
+  border-color: var(--burbuja-humano-borde);
+  border-bottom-right-radius: 4px;
+}
+
+.firma {
+  font-size: 11.5px;
+  color: var(--texto-suave);
+  margin-top: 4px;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.firma .quien { font-weight: 600; }
+.mensaje-humano .firma .quien { color: #8A5A00; }
+.mensaje-bot .firma .quien { color: var(--activo-texto); }
+
+/* ---------- Estados vacíos y de carga ---------- */
+
+.estado-vacio {
+  color: var(--texto-suave);
+  font-size: 14px;
+  padding: 24px 12px;
+  text-align: center;
+}
+.estado-centrado {
+  margin: auto;
+  max-width: 320px;
+}
+
+.esqueleto {
+  height: 74px;
+  border-radius: var(--radio);
+  margin-bottom: 8px;
+  background: linear-gradient(90deg, #EEF2F4 25%, #F7FAFB 50%, #EEF2F4 75%);
+  background-size: 200% 100%;
+  animation: brillo 1.3s infinite linear;
+}
+@keyframes brillo {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .esqueleto { animation: none; }
+}
+
+/* ---------- Celular ---------- */
+
+@media (max-width: 860px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+  .columna-lista, .columna-detalle { grid-column: 1; grid-row: 1; }
+
+  /* Una vista por vez: o la lista, o el historial. `data-vista` lo maneja
+     panel.js, y el botón "← Conversaciones" vuelve. */
+  .layout[data-vista="lista"] .columna-detalle { display: none; }
+  .layout[data-vista="detalle"] .columna-lista { display: none; }
+
+  .columna-lista { border-right: none; }
+  .volver { display: inline-flex; }
+
+  .detalle-cabecera {
+    flex-wrap: wrap;
+    padding: 12px 16px;
+    gap: 10px;
+  }
+  .volver { flex: 0 0 100%; justify-content: flex-start; padding-left: 0; }
+  .detalle-acciones { width: 100%; margin-left: 0; justify-content: space-between; }
+  .hilo { padding: 16px; }
+  .mensaje { max-width: 88%; }
+  .aviso-pausa, .aviso-ok { margin: 12px 16px 0; }
+  .cabecera { padding: 0 14px; gap: 12px; }
+  .cabecera h1 { font-size: 15px; padding-left: 12px; }
+}

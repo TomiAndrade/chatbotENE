@@ -23,7 +23,7 @@ class RolMensaje(str, enum.Enum):
 
 class MotivoPausa(str, enum.Enum):
     """Por qué está prendido modo_humano. La distinción existe porque solo
-    una de las dos expira sola (ver `app.main._pausa_vigente`):
+    una de las dos expira sola (ver `app.pausa.pausa_vigente`):
 
     - ESCALAMIENTO: el modelo decidió que hacía falta una persona. No expira,
       se desmarca a mano (`scripts/resetear_modo_humano.py`).

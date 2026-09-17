@@ -4,7 +4,7 @@ escalamiento."""
 
 import hashlib
 import hmac
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from app.mensajes import (
     MENSAJE_ESCALAMIENTO_EN_HORARIO,
@@ -113,3 +113,61 @@ def payload_meta_statuses(wa_message_id: str, telefono: str, status: str = "deli
             }
         ],
     }
+
+
+# --- Datos de prueba para el CRM ----------------------------------------
+#
+# El panel lee conversaciones y mensajes ya guardados, así que los tests los
+# arman directo en la base en vez de hacerlos pasar por el webhook: lo que se
+# quiere probar es qué muestra el CRM, no cómo llegó cada mensaje.
+
+def crear_conversacion(
+    db,
+    identificador_externo: str,
+    mensajes: list[tuple] = (),
+    canal: str = "whatsapp",
+    modo_humano: bool = False,
+    motivo_pausa=None,
+    modo_humano_desde: datetime | None = None,
+    resumen_escalamiento: str | None = None,
+    escalada_en: datetime | None = None,
+):
+    """Crea una conversación con sus mensajes.
+
+    `mensajes` es una lista de `(rol, texto, minutos_atras)`: los minutos se
+    cuentan hacia atrás desde ahora, así el orden cronológico queda
+    explícito en el test y no depende de en qué orden se hayan insertado.
+    """
+    from app.models import Conversacion, Mensaje
+
+    conversacion = Conversacion(
+        canal=canal,
+        identificador_externo=identificador_externo,
+        modo_humano=modo_humano,
+        motivo_pausa=motivo_pausa,
+        modo_humano_desde=modo_humano_desde,
+        resumen_escalamiento=resumen_escalamiento,
+        escalada_en=escalada_en,
+    )
+    db.add(conversacion)
+    db.commit()
+    db.refresh(conversacion)
+
+    ultimo_instante = conversacion.creada_en
+    for rol, texto, minutos_atras in mensajes:
+        creado_en = datetime.now(timezone.utc) - timedelta(minutes=minutos_atras)
+        db.add(
+            Mensaje(
+                conversacion_id=conversacion.id,
+                rol=rol,
+                contenido=texto,
+                creado_en=creado_en,
+            )
+        )
+        ultimo_instante = creado_en
+
+    if mensajes:
+        conversacion.ultimo_mensaje_en = ultimo_instante
+    db.commit()
+    db.refresh(conversacion)
+    return conversacion
