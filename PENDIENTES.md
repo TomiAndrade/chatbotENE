@@ -114,6 +114,120 @@ se escala" como explícitamente fuera de alcance. Se decidió sumarlo en agosto 
 Sigue abierto **quién** es esa persona y con qué casilla. El horario ya no:
 es 8–18 de lunes a viernes, unificado con el del edificio (`app/mensajes.py`).
 
+**Actualización (septiembre 2026, CRM):** con el panel de `/crm`
+(spec-crm-conversaciones.md) ya existe **dónde** leer una conversación
+escalada y devolverla al bot — eso antes no existía y era la mitad del
+problema. La otra mitad sigue igual: **nadie se entera de que pasó**. El
+panel hay que abrirlo; no avisa. Así que esto sigue siendo bloqueante para
+prender `ESCALAMIENTO_HABILITADO`, y el aviso por mail sigue pendiente tal
+como está descrito arriba. Lo que cambió es que ya no hace falta resolver
+"¿y después dónde lo leen?" en el mismo paso.
+
+---
+
+## 1.c. Poner el CRM en producción — bloqueante del panel
+
+El login del panel es **propio**: usuario y contraseña de una cuenta de
+`crm_usuarios`, con Argon2id (ver spec-crm-conversaciones.md, sección 3).
+Reemplazó a Auth0 en septiembre de 2026, antes de que la aplicación de Auth0
+llegara a existir, así que no quedó ninguna integración externa que validar:
+lo que falta es operativo.
+
+Lo que se probó y cómo (para no volver a discutirlo):
+
+- **Contra la suite de tests**: alta de la primera cuenta, contraseña
+  correcta e incorrecta, hash Argon2id sin texto plano, límite de intentos,
+  no-enumeración de cuentas, sesión manipulada / vencida / cerrada /
+  invalidada al cambiar la contraseña o desactivar la cuenta, CSRF en
+  reactivar y salir, ningún endpoint privado sin sesión, y que el webhook de
+  Meta no dependa del panel.
+- **Contra un Postgres real** (contenedor de prueba aislado, no la base del
+  bot): creación de las tablas, alta de la primera cuenta desde el comando de
+  consola, login correcto e incorrecto, bloqueo por intentos, lectura y
+  reactivación de una conversación sin mandar nada por WhatsApp, logout con y
+  sin token CSRF, y que el arranque muera con código 3 si quedaron tablas del
+  login anterior.
+
+Lo que falta, en orden:
+
+1. **Servir el panel por https** y poner `CRM_BASE_URL` con ese dominio. Con
+   http fuera de localhost el arranque corta: la cookie de sesión no puede
+   salir con el flag `Secure` y la contraseña viajaría en claro.
+2. **`DEBUG=false`** (es lo mismo que ya pide el checklist de deploy del
+   bot).
+3. **Crear la primera cuenta** en el servidor de producción:
+   `python scripts/crm_usuario.py crear <usuario>`. El comando pide la
+   contraseña sin mostrarla; no se pasa por chat ni por WhatsApp.
+4. **Respaldar la base** antes de prender el panel: el alta de cuentas
+   escribe en la misma base que el bot.
+5. **Probar el acceso a mano** desde un navegador: entrar, leer una
+   conversación, reactivar el bot, salir, y confirmar que la cookie ya no
+   sirve.
+6. **Si la base ya tuvo el CRM con Auth0** (no es el caso de la base de
+   producción, que nunca lo tuvo): borrar `crm_transacciones_oidc` y
+   `crm_sesiones` antes de arrancar. El servidor no levanta si están y dice
+   el comando exacto.
+
+Lo que **no** hace falta y conviene no inventar: no hay registro público, no
+hay recuperación de contraseña por mail (la cambia quien administra, con el
+comando) y no hay roles — toda cuenta activa ve el panel entero.
+
+---
+
+## 1.d. Integrar la rama del CRM con `develop` y con BSUID
+
+`feat/crm-conversaciones` salió de `73ce9a8`. Nada de esto está hecho todavía
+y **no se mezcló ninguna rama**: es el mapa para cuando se haga.
+
+### De `develop` (1 commit por delante)
+
+`d75437e` — "el bot habla de ENE en primera persona, no como tercero", que
+toca `prompts/system-prompt.md` y `prompts/knowledge-base.md`. **La rama del
+CRM no toca `prompts/`**, así que entra sin conflicto.
+
+### De `feat/whatsapp-bsuid` (sin commitear, en su propio worktree)
+
+Las dos ramas tocan diez archivos en común. Ninguna se puede mergear encima
+de la otra sin mirar; lo que sigue es qué hay que adaptar en cada uno.
+
+**Ya resuelto de este lado**: `app/db.py` gana en las dos ramas un accesor al
+engine con el mismo propósito. Acá se lo llamó **`obtener_engine()`**, igual
+que en BSUID, justamente para que no queden dos funciones haciendo lo mismo.
+
+Conflictos de texto, todos chicos:
+
+| Archivo | Qué choca |
+|---|---|
+| `app/config.py` | Las dos suman campos al dataclass y a `_cargar_config()`. Se quedan los dos: `preferir_bsuid_al_enviar` y `crm_habilitado`/`crm_base_url`. |
+| `app/db.py` | `init_db()` suma imports en las dos (`app.crm.modelos` acá, los modelos de BSUID allá) y las dos agregan `obtener_engine()` — dejar **una sola**. |
+| `app/main.py` | El bloque de imports, y `al_iniciar()`: acá suma `_revisar_crm()` después de `init_db()`. BSUID reescribe el cuerpo del webhook, que el CRM no toca. |
+| `app/models.py` | El CRM solo cambió una referencia en un docstring. |
+| `scripts/resetear_modo_humano.py` | Las dos lo reescriben. El CRM lo dejó llamando a `reactivar_bot`; BSUID le cambia cómo busca la conversación. |
+| `.env.example`, `README.md`, `CLAUDE.md`, `PENDIENTES.md` | Secciones agregadas en las dos. Se concatenan. |
+
+Tests a adaptar:
+
+| Archivo | Qué hay que hacer |
+|---|---|
+| `tests/conftest.py` | Las dos suman variables de entorno y fixtures. **Ojo con `meta_enviados`**: BSUID lo cambia de lista de textos a lista de `(destino, texto)`. Los tests del CRM solo cuentan cuántos elementos tiene (para afirmar que el panel **no** manda nada), así que siguen andando, pero conviene leerlos de nuevo. |
+| `tests/helpers.py` | BSUID cambia las firmas de `payload_meta_texto` y compañía. `tests/test_crm_acceso.py` las llama posicionalmente (`payload_meta_texto(id, telefono, texto)`) en dos tests; revisar que el orden siga siendo ese. El `crear_conversacion` que agregó el CRM no choca con nada. |
+| `tests/test_validacion_config.py` | `_config_valida()` y `_config_con_crm()` tienen que listar los campos de las dos ramas, o `Config` no se construye. |
+| `tests/test_pausa_humana.py` | El CRM solo renombró referencias en docstrings. |
+
+Lo que no es un conflicto de texto pero hay que decidir:
+
+- **Qué muestra el panel como identificador.** Hoy muestra
+  `identificador_externo` verbatim (spec-crm-conversaciones.md, sección 1).
+  Con BSUID, una conversación puede tener BSUID, teléfono, nombre visible y
+  username (`IdentificadorConversacion`, y las columnas nuevas de
+  `Conversacion`). El panel es justamente donde eso se mira, así que
+  `app/crm/servicio.py:_resumen` va a querer mostrar el nombre visible con el
+  identificador debajo, en vez de un número pelado. **No está hecho**: la
+  rama del CRM no sabe que BSUID existe.
+- **La limpieza de tablas de `tests/conftest.py`** borra `crm_*` de un lado e
+  `identificadores` del otro, y los identificadores tienen FK a
+  conversaciones: el orden de los `delete()` importa.
+
 ---
 
 ## 2. Hallazgos del spike de tool calling contra OpenRouter (31/07/2026)

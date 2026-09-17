@@ -17,10 +17,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.db import SessionLocal, crear_engine
 from app.models import CANAL_WHATSAPP, Conversacion
+from app.pausa import reactivar_bot
 
 
 def resetear_modo_humano(identificador_externo: str, canal: str = CANAL_WHATSAPP) -> bool:
-    """Devuelve True si encontró y reseteó la conversación, False si no existe."""
+    """Devuelve True si encontró y reseteó la conversación, False si no existe.
+
+    Los campos que se limpian los define `reactivar_bot` (app/pausa.py), que
+    es lo mismo que usa el botón "Reactivar bot" del CRM: el script y el
+    panel tienen que dejar la conversación en el mismo estado.
+    """
     db = SessionLocal()
     try:
         conversacion = (
@@ -29,11 +35,7 @@ def resetear_modo_humano(identificador_externo: str, canal: str = CANAL_WHATSAPP
         if conversacion is None:
             return False
 
-        conversacion.modo_humano = False
-        conversacion.motivo_pausa = None
-        conversacion.modo_humano_desde = None
-        conversacion.resumen_escalamiento = None
-        conversacion.escalada_en = None
+        reactivar_bot(conversacion)
         db.commit()
         return True
     finally:

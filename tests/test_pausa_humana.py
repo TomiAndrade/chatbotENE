@@ -55,7 +55,7 @@ def _a_utc(instante: datetime) -> datetime:
     """Normaliza a UTC un datetime leído de la base, sin asumir el motor.
 
     SQLite devuelve `modo_humano_desde` naive (ver el docstring de
-    `_pausa_vigente` en app/main.py) representando un valor que ya está en
+    `pausa_vigente` en app/pausa.py) representando un valor que ya está en
     UTC — `.replace(tzinfo=utc)` sólo le pone la etiqueta. Postgres lo
     devuelve aware, y ahí hace falta `.astimezone(utc)` para convertir de
     verdad. Mezclar los dos casos importa: `.astimezone()` sobre un naive
@@ -229,7 +229,7 @@ def test_escalar_a_humano_no_se_pierde_si_habia_una_pausa_manual_vencida(escalam
     """Si había una pausa manual vencida y ahora el modelo decide escalar, el
     escalamiento tiene que ganar: eleva motivo_pausa a ESCALAMIENTO (que no
     expira) con una fecha fresca, no la fecha vieja de la pausa manual — si
-    la heredara, _pausa_vigente lo calcularía como ya expirado apenas
+    la heredara, pausa_vigente lo calcularía como ya expirado apenas
     escalado."""
     _post_entrante(client, "wamid.previo11", "hola")
     conversacion = _conversacion_de_prueba()

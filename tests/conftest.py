@@ -8,6 +8,7 @@ desarrollo.
 """
 
 import os
+import secrets
 import tempfile
 from pathlib import Path
 
@@ -35,12 +36,19 @@ os.environ["HISTORIAL_DIAS_VALIDEZ"] = "7"
 os.environ["LIMITE_MENSAJES_HORA"] = "30"
 os.environ["PAUSA_HUMANA_MINUTOS"] = "120"
 os.environ["ESCALAMIENTO_HABILITADO"] = "false"
+# CRM prendido en la suite: sin CRM_HABILITADO el router ni siquiera se
+# registra (app/main.py) y los tests del panel darían 404 por el motivo
+# equivocado. No hay ninguna credencial del panel acá — las cuentas viven en
+# la base y las crea cada test con la fixture `usuario_crm`.
+os.environ["CRM_HABILITADO"] = "true"
+os.environ["CRM_BASE_URL"] = "https://testserver"
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app import models
 from app.config import config
+from app.crm import modelos as crm_modelos
 from app.db import SessionLocal, crear_engine, init_db
 from app.main import app, meta_client
 
@@ -67,6 +75,13 @@ def _base_limpia():
     try:
         db.query(models.Mensaje).delete()
         db.query(models.Conversacion).delete()
+        # También las del CRM: si una sesión sobreviviera al test, el
+        # siguiente podría entrar al panel sin haberse logueado; si
+        # sobrevivieran los intentos fallidos, un test dejaría bloqueado al
+        # usuario del siguiente.
+        db.query(crm_modelos.SesionCrm).delete()
+        db.query(crm_modelos.IntentoLoginCrm).delete()
+        db.query(crm_modelos.UsuarioCrm).delete()
         db.commit()
     finally:
         db.close()
@@ -118,3 +133,58 @@ def client(meta_enviados):
     init_db() directo, así que no hace falta pasar por el ciclo de vida
     completo de FastAPI solo para pegarle al webhook."""
     return TestClient(app)
+
+
+# Las credenciales de prueba del panel. Son de mentira y solo existen dentro
+# de la suite: la contraseña se genera al azar en cada corrida para que no
+# haya ninguna escrita en el repo, ni siquiera una de juguete.
+USUARIO_DE_PRUEBA = "equipo-ene"
+PASSWORD_DE_PRUEBA = "prueba-" + secrets.token_urlsafe(16)
+
+
+@pytest.fixture
+def cliente_crm(meta_enviados):
+    """Cliente para los tests del CRM, sobre https.
+
+    El esquema importa: la cookie de sesión sale con el flag `Secure` salvo
+    en DEBUG (ver `cookie_segura` en app/crm/auth.py), y esta suite corre con
+    DEBUG=false, igual que producción. Un cliente HTTP plano descartaría la
+    cookie en silencio y los tests fallarían por el motivo equivocado.
+
+    Pide `meta_enviados` aunque el CRM no mande nada por WhatsApp: justamente
+    por eso. Si alguna vez el panel empezara a enviar algo, el mock está
+    puesto y el test lo ve, en vez de pegarle a la API real de Meta.
+    """
+    return TestClient(app, base_url="https://testserver")
+
+
+@pytest.fixture
+def usuario_crm(db):
+    """Una cuenta del panel, creada como la crearía el comando de consola
+    (misma función, `usuarios.crear`). Devuelve la fila."""
+    from app.crm import usuarios
+
+    return usuarios.crear(db, USUARIO_DE_PRUEBA, PASSWORD_DE_PRUEBA)
+
+
+def hacer_login(
+    cliente: TestClient,
+    usuario: str = USUARIO_DE_PRUEBA,
+    password: str = PASSWORD_DE_PRUEBA,
+):
+    """El POST del login, tal cual lo manda la pantalla de entrar. No afirma
+    nada: hay tests que lo usan esperando que falle."""
+    return cliente.post("/crm/api/login", json={"usuario": usuario, "password": password})
+
+
+def login_crm(cliente: TestClient, usuario_crm) -> str:
+    """Loguea al cliente y devuelve el token CSRF que necesitan las acciones
+    que escriben (reactivar y salir).
+
+    Toma `usuario_crm` (la fixture) para que el test tenga que pedirla: sin
+    la cuenta creada no hay con qué loguearse, y así el orden queda explícito
+    en la firma en vez de depender de un efecto de importación.
+    """
+    respuesta = hacer_login(cliente, usuario_crm.usuario, PASSWORD_DE_PRUEBA)
+    assert respuesta.status_code == 200, respuesta.text
+    return cliente.get("/crm/api/sesion").json()["csrf"]

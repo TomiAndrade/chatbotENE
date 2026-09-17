@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Centro de conversaciones — ENE</title>
+  <link rel="icon" href="/crm/estaticos/logo-ene.png">
+  <link rel="stylesheet" href="/crm/estaticos/crm.css">
+</head>
+<body class="pantalla-centrada">
+  <main class="tarjeta">
+    <img class="logo-tarjeta" src="/crm/estaticos/logo-ene.png" alt="ENE — Entender Neuquén es Emprender">
+    <h1>Centro de conversaciones</h1>
+    <p class="subtitulo">Panel interno de ENE. Entrá con tu cuenta del equipo.</p>
+
+    <p id="error" class="error" role="alert" hidden></p>
+
+    <!-- El formulario no hace submit al navegador: login.js lo manda por
+         fetch como JSON (ver el docstring de DatosDeLogin en rutas.py). El
+         <form> está igual porque es lo que hace que el gestor de contraseñas
+         reconozca los campos y que Enter funcione. -->
+    <form id="formulario" novalidate>
+      <label class="campo" for="usuario">
+        <span>Usuario</span>
+        <input id="usuario" name="username" type="text" autocomplete="username"
+               autocapitalize="none" autocorrect="off" spellcheck="false" required autofocus>
+      </label>
+
+      <label class="campo" for="password">
+        <span>Contraseña</span>
+        <input id="password" name="password" type="password"
+               autocomplete="current-password" required>
+      </label>
+
+      <button id="entrar" type="submit" class="boton-primario ancho-completo">Entrar</button>
+    </form>
+
+    <p class="pie-tarjeta">
+      Cada persona entra con su propia cuenta. Si no podés entrar, pedile a
+      quien administra el panel que te cree una o te cambie la contraseña.
+    </p>
+  </main>
+
+  <script src="/crm/estaticos/login.js"></script>
+</body>
+</html>
