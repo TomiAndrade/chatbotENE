@@ -50,7 +50,7 @@ tests siguen ahí por si más adelante Meta habilita Coexistence.
 import json
 import logging
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
@@ -58,11 +58,14 @@ from sqlalchemy.exc import IntegrityError
 
 from app import mensajes
 from app.config import config
-from app.db import SessionLocal, crear_engine, init_db
+from app.crm.auth import crm_habilitado
+from app.crm.rutas import router as crm_router
+from app.db import SessionLocal, crear_engine, init_db, obtener_engine
 from app.historial import construir_historial
 from app.limite import mensajes_ultima_hora
 from app.meta import MetaClient, verificar_challenge, verificar_firma_webhook
 from app.models import CANAL_WHATSAPP, Conversacion, Mensaje, MotivoPausa, RolMensaje
+from app.pausa import pausa_vigente
 from app.respuesta import ErrorTransitorioProveedor, generar_respuesta
 from app.tiempos import Cronometro
 from app.validacion_config import ConfigInvalida, resumen_config, validar_config
@@ -104,6 +107,19 @@ logger = logging.getLogger("bot")
 app = FastAPI(title="Bot WhatsApp ENE IA LAB")
 meta_client = MetaClient()
 
+# El CRM (panel de conversaciones) se monta solo si está prendido: con
+# CRM_HABILITADO=false no se registra ninguna de sus rutas y `/crm` responde
+# 404 como cualquier URL inexistente. Un servidor que solo atiende el webhook
+# no expone un panel que nadie configuró — y este servidor está publicado en
+# internet para que le pegue Meta.
+#
+# El panel no agrega ningún middleware: el login es propio y la única cookie
+# que existe es la de sesión, que pone y saca `app/crm/auth.py`. (Con Auth0
+# hacía falta además el SessionMiddleware de Starlette para la cookie
+# transitoria del flujo OIDC; se fue con el resto de aquel mecanismo.)
+if crm_habilitado():
+    app.include_router(crm_router)
+
 
 @app.on_event("startup")
 def al_iniciar() -> None:
@@ -124,6 +140,39 @@ def al_iniciar() -> None:
     logger.info(resumen_config(config))
     crear_engine()
     init_db()
+
+    if config.crm_habilitado:
+        _revisar_crm()
+
+
+def _revisar_crm() -> None:
+    """Dos chequeos del panel que necesitan la base ya abierta, así que no
+    pueden vivir en `validar_config()`.
+
+    1. **Que no queden tablas del login anterior (Auth0).** Este proyecto no
+       tiene migraciones: `create_all` crea lo que falta y no modifica nada,
+       así que una `crm_sesiones` de aquella época quedaría con su esquema
+       viejo y sus filas viejas. Corta el arranque — es un error de estado de
+       la base, no una advertencia.
+    2. **Que exista al menos una cuenta.** No es un error: es el panel
+       prendido antes de crear la primera cuenta, que es como queda recién
+       prendido. Pero tiene que quedar dicho, porque el síntoma —nadie puede
+       entrar y el login no dice por qué, a propósito— no se explica solo.
+    """
+    from app.crm import usuarios
+    from app.crm.modelos import verificar_esquema
+
+    verificar_esquema(obtener_engine())
+
+    db = SessionLocal()
+    try:
+        if usuarios.cantidad(db) == 0:
+            logger.warning(
+                "CRM prendido y sin ninguna cuenta: no va a poder entrar nadie. "
+                "Crear la primera con: python scripts/crm_usuario.py crear <usuario>"
+            )
+    finally:
+        db.close()
 
 
 @app.on_event("shutdown")
@@ -165,45 +214,10 @@ def buscar_o_crear_conversacion(db, canal: str, identificador_externo: str) -> C
         return db.query(Conversacion).filter_by(canal=canal, identificador_externo=identificador_externo).one()
 
 
-def _pausa_vigente(conversacion: Conversacion, ahora: datetime) -> bool:
-    """Si `conversacion` está en modo_humano *ahora mismo*, contemplando que
-    la pausa por intervención manual expira.
-
-    Quién decide si expira es `motivo_pausa`, no si `modo_humano_desde` tiene
-    valor: solo INTERVENCION_MANUAL expira, a los `PAUSA_HUMANA_MINUTOS` de
-    la última vez que la secretaría respondió (se reinicia con cada mensaje
-    nuevo, ver `registrar_intervencion_humana`). ESCALAMIENTO no expira
-    nunca, se desmarca a mano. Un `motivo_pausa` en None con `modo_humano`
-    prendido no debería pasar (dato viejo, o alguien puso `modo_humano = 1`
-    a mano por SQL sin especificar el motivo) — se trata como si no
-    expirara: errar hacia "sigue pausado" es más seguro que arriesgarse a
-    que el bot le escriba encima a alguien.
-
-    El guard de `tzinfo is None` de acá abajo es para SQLite: devuelve los
-    DateTime(timezone=True) sin tzinfo aunque se hayan guardado en UTC (se
-    probó a mano: el round-trip pierde el offset). Todo lo que este proyecto
-    guarda en esas columnas es `datetime.now(timezone.utc)` o equivalente,
-    así que un valor naive acá se interpreta como UTC. Contra Postgres las
-    fechas ya vuelven aware (`timestamptz`) y el guard no se dispara — sigue
-    ahí porque el mismo código corre contra los dos motores.
-    """
-    if not conversacion.modo_humano:
-        return False
-    if conversacion.motivo_pausa != MotivoPausa.INTERVENCION_MANUAL:
-        return True
-
-    desde = conversacion.modo_humano_desde
-    if desde is None:
-        return True
-    if desde.tzinfo is None:
-        desde = desde.replace(tzinfo=timezone.utc)
-    return ahora - desde <= timedelta(minutes=config.pausa_humana_minutos)
-
-
 def _ya_escalada(conversacion: Conversacion) -> bool:
     """True si la conversación ya está escalada por el modelo.
 
-    Distinto de `esta_en_modo_humano`/`_pausa_vigente`: es el chequeo propio
+    Distinto de `esta_en_modo_humano`/`pausa_vigente`: es el chequeo propio
     de `escalar_a_humano` para no pisar un escalamiento con otro. Una pausa
     manual vigente (la secretaría ya está respondiendo) NO cuenta acá — si
     contara, un escalamiento del modelo que cae justo en esa ventana se
@@ -217,7 +231,7 @@ def _ya_escalada(conversacion: Conversacion) -> bool:
 def esta_en_modo_humano(db, conversacion: Conversacion) -> bool:
     """Re-lee modo_humano de la base, sin confiar en lo que tenga cargado la
     sesión, y aplica la expiración por tiempo de la pausa manual (ver
-    `_pausa_vigente`).
+    `pausa_vigente`, en app/pausa.py).
 
     Hace falta porque entre el chequeo de modo_humano de
     `procesar_mensaje_entrante` y el momento de enviar puede pasar bastante
@@ -228,7 +242,7 @@ def esta_en_modo_humano(db, conversacion: Conversacion) -> bool:
     que el criterio de aceptación 4 del spec-etapa2.md prohíbe.
     """
     db.refresh(conversacion)
-    return _pausa_vigente(conversacion, datetime.now(timezone.utc))
+    return pausa_vigente(conversacion, datetime.now(timezone.utc))
 
 
 def enviar_y_guardar(
@@ -503,7 +517,7 @@ def procesar_mensaje_entrante(identificador_externo: str, wa_message_id: str, co
             enmascarar_identificador(identificador_externo), cronometro_guardado.ms(),
         )
 
-        pausado = _pausa_vigente(conversacion, datetime.now(timezone.utc))
+        pausado = pausa_vigente(conversacion, datetime.now(timezone.utc))
         logger.info(
             "Mensaje de %s guardado (pausado=%s): %s",
             enmascarar_identificador(identificador_externo), pausado, contenido,

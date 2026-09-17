@@ -85,6 +85,16 @@ def SessionLocal(*args, **kwargs):
     return _session_factory(*args, **kwargs)
 
 
+def obtener_engine():
+    """El engine ya creado. Lo necesita lo que habla con el motor y no con una
+    sesión — hoy, inspeccionar el esquema al arrancar
+    (`app/crm/modelos.py:verificar_esquema`). Misma regla que `SessionLocal`:
+    hay que haber llamado a `crear_engine()` antes."""
+    if _engine is None:
+        raise RuntimeError("obtener_engine() llamado antes de crear_engine().")
+    return _engine
+
+
 def init_db() -> None:
     """Crea las tablas si no existen. Se llama al arrancar la app, después
     de crear_engine().
@@ -94,6 +104,13 @@ def init_db() -> None:
     hay que aplicarlo a mano en Postgres — ver PENDIENTES.md.
     """
     from app import models  # noqa: F401 — registra los modelos en Base antes de crear las tablas
+
+    # Las tablas del CRM se registran siempre, esté el panel prendido o no:
+    # el esquema de la base no depende de una variable de entorno. Si el CRM
+    # está apagado quedan tres tablas vacías y nada más; si se prende
+    # después, ya existen. `create_all` agrega solo lo que falta, así que en
+    # una base con datos no toca `conversaciones` ni `mensajes`.
+    from app.crm import modelos  # noqa: F401
 
     if _engine is None:
         raise RuntimeError("init_db() llamado antes de crear_engine().")

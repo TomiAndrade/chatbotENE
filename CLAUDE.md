@@ -68,6 +68,27 @@ solo contra los tests): el camino de falla, exit code 3 incluido, y que
 (no local, no hay una a mano) no se probó — solo que la línea de resumen se
 loguea sin secretos y que llega a intentar conectar.
 
+**CRM de conversaciones (spec-crm-conversaciones.md): implementado, con
+tests, sin usar todavía contra datos reales.** Panel en `/crm`, dentro de la
+misma app FastAPI (`app/crm/`): lista de conversaciones, historial con los
+tres roles diferenciados, filtro de pausadas y un botón "Reactivar bot". Solo
+lee la base; lo único que escribe es apagar la pausa. **No manda mensajes
+por WhatsApp — no hay campo para responder.** Viene apagado: con
+`CRM_HABILITADO=false` no se registra ninguna ruta y `/crm` es un 404. Falta
+servirlo por https con un dominio real y que el equipo lo use.
+
+**Login del CRM propio (usuario y contraseña, Argon2id): implementado, con
+tests y probado contra un Postgres real de prueba.** Reemplazó a Auth0
+(septiembre 2026), que a su vez había reemplazado a un usuario y contraseña
+compartidos; de los dos mecanismos anteriores no quedó nada — ni código, ni
+dependencias (`authlib`, `itsdangerous`), ni variables, ni pantallas, ni la
+tabla `crm_transacciones_oidc`. **Una cookie del sistema anterior no da
+acceso**: el hash del token de sesión lleva un separador de dominio y el
+arranque corta si encuentra las tablas viejas. Las cuentas se crean **solo**
+con `scripts/crm_usuario.py`. Falta servirlo por https con un dominio real y
+abrir las pantallas a mano en un navegador; el paso a paso está en el README
+y el checklist en PENDIENTES.md, sección 1.c.
+
 **`PENDIENTES.md` tiene la lista completa de lo que falta**, ordenada por
 prioridad: la validación real de la etapa 2, los `[PENDIENTE]` del knowledge
 base a completar con el equipo, el checklist de deploy y la deuda técnica menor.
@@ -263,6 +284,63 @@ más abajo, sin usarse.
     (`starlette.background.BackgroundTasks.__call__`,
     `starlette.middleware.errors.ServerErrorMiddleware.__call__`), no
     asumido.
+- **El CRM (`app/crm/`) solo lee la base, salvo por la reactivación.** Vive
+  dentro de la misma app y usa los mismos modelos: no hay segunda base ni
+  build (dos HTML, un CSS y dos JS servidos por el mismo proceso). La única
+  dependencia nueva es `argon2-cffi`, por el login. **Ningún secreto de Meta
+  se usa como credencial del panel**, y estar logueado en el panel no saltea
+  la firma de Meta.
+- **El login del CRM es propio: usuario y contraseña, Argon2id**
+  (`app/crm/passwords.py`, parámetros explícitos: 64 MiB, t=3, p=4). Las
+  cuentas viven en `crm_usuarios` y **se crean solo desde la consola**
+  (`scripts/crm_usuario.py`): no hay registro público, ni alta desde el
+  panel, ni ninguna contraseña en la config. El comando pide la contraseña
+  con `getpass` y **nunca la toma como argumento** — quedaría en el historial
+  de la consola y en la lista de procesos. Detalle completo en
+  spec-crm-conversaciones.md, sección 3.
+- **Cambiar la contraseña o desactivar una cuenta cierra sus sesiones, por
+  dos caminos a la vez**: se revocan las filas de `crm_sesiones` y se mueve
+  `credenciales_cambiadas_en`, que `buscar_sesion_valida` compara contra la
+  fecha de cada sesión. La marca de tiempo cubre una sesión creada por otra
+  instancia entre el cambio y la revocación; la revocación deja el motivo
+  visible en la base.
+- **El límite de intentos de login se cuenta contra la base**
+  (`crm_intentos_login`): 5 por cuenta y 20 por IP en una ventana deslizante
+  de 15 minutos. En memoria no serviría con más de una instancia del
+  servidor, que es la misma razón por la que `app/limite.py` cuenta contra la
+  base. El chequeo va **antes** de verificar la contraseña, así que la
+  correcta tampoco entra mientras esté bloqueada, y la IP sale de
+  `request.client.host`, nunca de `X-Forwarded-For`.
+- **Nada del login deja averiguar qué cuentas existen.** Cuenta inexistente,
+  cuenta desactivada y contraseña equivocada devuelven el mismo 401 con el
+  mismo texto; cuando la cuenta no existe se verifica igual contra un hash de
+  relleno para que tarde lo mismo; y el bloqueo se cuenta por el nombre que
+  se intentó, exista o no.
+- **Las sesiones del panel viven en Postgres, no en la cookie**
+  (`crm_sesiones`; junto con `crm_usuarios` y `crm_intentos_login` las crea
+  `init_db()` y no tocan `conversaciones` ni `mensajes`). La cookie lleva
+  solo un identificador aleatorio y en la base se guarda su SHA-256 **con un
+  separador de dominio delante** — eso último es lo que hace que una cookie
+  de la época de Auth0 no encuentre ninguna fila. Vencimiento absoluto de 12
+  horas, sesión nueva después de autenticar (fijación), y logout que revoca
+  en la base; ya no hay una segunda sesión con un proveedor que cerrar.
+  Cookie HttpOnly, `path=/crm` y `SameSite=Lax`: manda la cookie en las
+  navegaciones de arriba por GET (todas de solo lectura) y no en un POST que
+  nazca afuera. CSRF por header `X-CRM-CSRF` en reactivar y en salir, y el
+  POST del login es JSON justamente para que un formulario ajeno no lo pueda
+  disparar.
+- **El arranque no deja pasar una base con el esquema del CRM viejo**
+  (`modelos.verificar_esquema`, llamado desde `al_iniciar()`). Este proyecto
+  no tiene migraciones: `create_all` no modifica una tabla que ya existe, así
+  que una `crm_sesiones` de la época de Auth0 quedaría con su esquema y sus
+  filas. Corta con error y dice qué borrar.
+- **El estado que muestra el CRM es el que ve el bot, no la columna
+  `modo_humano`.** Una pausa por intervención manual vencida es una
+  conversación activa aunque el flag siga prendido, así que el panel calcula
+  con `pausa_vigente`. Esa función se mudó de `app/main.py` a `app/pausa.py`
+  (junto con `reactivar_bot`, que ahora comparten el botón del panel y
+  `scripts/resetear_modo_humano.py`) porque la necesitan los dos lados y
+  `app/main.py` importa el router del CRM — importar de vuelta sería un ciclo.
 - **`prompts/system-prompt.md` y `prompts/knowledge-base.md` se leen una sola
   vez al importar `app/prompt.py`** (no en cada mensaje). Los bloques
   `[PENDIENTE]` del knowledge base se dejan tal cual a propósito: le indican al
@@ -318,7 +396,16 @@ El deploy está fuera de alcance por ahora, pero esto hay que resolverlo antes:
   mail, no por WhatsApp**: un mensaje iniciado por el negocio fuera de la
   ventana de 24 horas necesita plantilla aprobada por Meta y se cobra por
   conversación, o sea que sería pagar por cada escalamiento. Ver PENDIENTES.md
-  sección 1.b.
+  sección 1.b. **El CRM cambia una parte de esto**: ahora hay dónde leer la
+  conversación escalada (antes no existía ningún lado). Lo que sigue sin
+  existir es el aviso de que pasó — nadie se entera si no abre el panel.
+- **Si se va a usar el CRM en producción:** `CRM_HABILITADO=true` y
+  `CRM_BASE_URL` con el dominio **https**, sin barra final (con http fuera de
+  localhost el servidor no arranca: la cookie no podría salir con `Secure`).
+  No hay ninguna otra variable — las cuentas se crean después, en el
+  servidor, con `python scripts/crm_usuario.py crear NOMBRE`, y conviene
+  respaldar la base antes. El paso a paso está en el README. Si no se
+  configura nada, el panel no existe y el bot funciona igual.
 
 ## Etapas siguientes
 
@@ -331,12 +418,14 @@ fuera de alcance:
 
 Fuera de alcance hasta que se diga lo contrario: feriados (se tratan como día
 hábil), deploy, transcripción de audios, mensajes con botones/listas/
-plantillas, y devolver una conversación de humano a bot automáticamente (se
-desmarca `modo_humano` a mano en la base).
+plantillas, y devolver una conversación de humano a bot **automáticamente**
+(se despausa a mano: con el botón "Reactivar bot" del CRM, o con
+`scripts/resetear_modo_humano.py`; los dos pasan por `reactivar_bot` en
+`app/pausa.py`).
 
 ## Tests
 
-`tests/` con pytest, 103 tests. No pegan a ninguna API real: Meta se mockea
+`tests/` con pytest, 227 tests. No pegan a ninguna API real: Meta se mockea
 (`meta_enviados`, fixture en `tests/conftest.py`) y el proveedor de IA se
 mockea por test parcheando `app.main.generar_respuesta` (`fijo` no necesita
 mock); los dos proveedores con IA se prueban con dobles (`httpx.MockTransport`
@@ -349,6 +438,36 @@ según horario, escalamiento por tool calling, fallo del modelo, error
 transitorio del proveedor, límite por número, parseo de tool calls de los
 dos proveedores, y `app/kapso.py` (histórico, sin usarse) con su propia
 matriz de firma y reintentos.
+
+Del CRM (`test_crm_usuarios.py`, `test_crm_login.py`, `test_crm_acceso.py`,
+`test_crm_esquema_viejo.py`, `test_crm_historial.py`,
+`test_crm_reactivar.py`): el alta de la primera cuenta con el comando de
+consola (incluido que **no** acepte la contraseña como argumento y que no la
+imprima), el hash Argon2id y que la contraseña no quede en claro en ninguna
+columna, login correcto e incorrecto, el límite de intentos (bloqueo, que la
+contraseña correcta tampoco entre, que un login bueno limpie el contador y
+que la ventana se suelte sola), la no-enumeración de cuentas, las sesiones
+(inventada, alterada, vencida, revocada, invalidada al cambiar la contraseña
+o desactivar la cuenta, y que el logout invalide una copia vieja de la
+cookie), que una cookie del sistema anterior no encuentre nada, que ningún
+endpoint privado responda sin sesión, CSRF en reactivar y en salir, que las
+rutas de Auth0 ya no existan, que el webhook y el panel sean puertas
+independientes, el orden y la vista previa de la lista, el identificador
+verbatim, la paginación del historial y el `desde` del refresco, la
+expiración de la pausa manual reflejada en el estado, y la reactivación: que
+limpie los cinco campos, que **no mande nada por WhatsApp**, que no toque los
+mensajes y que el próximo mensaje entrante siga el flujo normal.
+
+**Ninguna contraseña de prueba está escrita en el repo**: la de la suite se
+genera al azar en cada corrida (`PASSWORD_DE_PRUEBA` en `tests/conftest.py`)
+y los tests que necesitan otra la piden a un helper. El cliente del panel va
+sobre `https://testserver` (fixture `cliente_crm`) porque la cookie sale con
+`Secure` salvo en el http local.
+
+**El límite de intentos se prueba también "desde otra instancia"**: un test
+escribe las filas de `crm_intentos_login` directo en la base, sin pasar por
+el cliente HTTP, y el bloqueo aparece igual. Es la propiedad que hace que
+funcione con más de un proceso, y no se vería mockeando un contador.
 
 Dos cosas al escribir tests acá, aprendidas de una revisión en la que los
 tests pasaban por un vacío:

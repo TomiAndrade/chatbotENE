@@ -148,6 +148,166 @@ contra la base real:
 `scripts/verificar_postgres.py` automatiza este checklist contra una base
 real (no se corre solo ni en CI).
 
+## CRM — panel de conversaciones
+
+El panel para leer lo que el bot viene conversando y reactivarlo cuando quedó
+pausado (ver `specs/spec-crm-conversaciones.md`). Corre dentro de la misma app:
+no hay un segundo servicio que levantar ni un build que correr.
+
+**El acceso es con usuario y contraseña propios**, uno por persona. Las
+cuentas viven en la base (`crm_usuarios`) y se crean **desde la consola**: no
+hay registro público, ni alta desde el panel, ni ninguna contraseña en el
+`.env`.
+
+**Viene apagado.** Con `CRM_HABILITADO=false` (el default) no se registra
+ninguna ruta y `/crm` responde 404 — el servidor está publicado en internet
+para que le pegue Meta, así que el panel existe solo si alguien lo prende.
+
+### 1. Configurar el servidor
+
+En `.env` (ver `.env.example` para el detalle de cada una):
+
+```
+CRM_HABILITADO=true
+CRM_BASE_URL=https://TU-DOMINIO   # sin barra final ni ruta
+```
+
+Y nada más: **no hay ninguna credencial del panel en la configuración**.
+
+`CRM_BASE_URL` decide una sola cosa: si la cookie de sesión sale con el flag
+`Secure`. Por eso **tiene que ser https en producción** — con http fuera de
+localhost el servidor no arranca y dice por qué. Para probar en
+`http://localhost:8000` hace falta además `DEBUG=true`.
+
+Si algo falta o es incoherente, el server **no levanta** (misma regla que el
+resto de la config, `spec-validacion-config-arranque.md`).
+
+### 2. Crear la primera cuenta
+
+Con el `.env` cargado y desde `chatbot-polo/`:
+
+```bash
+python scripts/crm_usuario.py crear NOMBREDEUSUARIO
+```
+
+El comando pide la contraseña **dos veces y sin mostrarla**, y guarda solo su
+hash Argon2id. **La contraseña no se pasa como argumento** (quedaría en el
+historial de la consola y en la lista de procesos), no se imprime y no se
+loguea. Mínimo 12 caracteres.
+
+El mismo comando crea el resto de las cuentas del equipo, una por persona.
+Nada de cuentas compartidas.
+
+Si el panel arranca sin ninguna cuenta, el log lo avisa con un WARNING: nadie
+va a poder entrar, y el login no dice por qué a propósito.
+
+### 3. Dar y quitar acceso
+
+```bash
+python scripts/crm_usuario.py listar                      # qué cuentas hay
+python scripts/crm_usuario.py crear NOMBREDEUSUARIO       # dar acceso
+python scripts/crm_usuario.py cambiar-password NOMBREDEUSUARIO
+python scripts/crm_usuario.py desactivar NOMBREDEUSUARIO  # quitar acceso
+python scripts/crm_usuario.py activar NOMBREDEUSUARIO     # devolverlo
+```
+
+**Cambiar la contraseña y desactivar una cuenta cierran las sesiones abiertas
+de esa persona en el acto**, sin reiniciar el servidor: la que tenga la
+cookie puesta queda afuera en su próximo click.
+
+Para cortar un acceso a mano desde la base (por ejemplo, si no hay consola de
+Python a mano):
+
+```sql
+update crm_usuarios set activo = false where usuario = 'NOMBREDEUSUARIO';
+update crm_sesiones set revocada_en = now()
+  where usuario_id = (select id from crm_usuarios where usuario = 'NOMBREDEUSUARIO');
+```
+
+No hay recuperación de contraseña por mail: si alguien la olvida, se la
+cambia con `cambiar-password`.
+
+### 4. Respaldo
+
+Las cuentas viven en la **misma base que las conversaciones**, así que el
+respaldo es el de siempre:
+
+```bash
+pg_dump "$DATABASE_URL" > respaldo-$(date +%F).sql
+```
+
+Conviene hacerlo **antes** de prender el panel la primera vez y antes de
+cualquier cambio de esquema. El dump incluye `crm_usuarios`: son hashes, no
+contraseñas, pero es material para un ataque de diccionario offline — se
+guarda con el mismo cuidado que el resto del dump.
+
+### 5. Abrirlo y probar el acceso
+
+Con el server levantado (`uvicorn app.main:app --reload`):
+
+```
+http://localhost:8000/crm
+```
+
+Lleva a la pantalla de entrar. La sesión dura **12 horas** y no se renueva
+con el uso: al vencer hay que volver a entrar.
+
+Vale la pena probar esto a mano la primera vez, en ese orden:
+
+1. Entrar con la cuenta recién creada.
+2. Abrir una conversación y leer el historial.
+3. Si hay una pausada, apretar **Reactivar bot** (no manda ningún mensaje por
+   WhatsApp: del otro lado no pasa nada).
+4. Apretar **Salir** y confirmar que volver atrás en el navegador ya no
+   muestra el panel.
+5. Escribir mal la contraseña cinco veces: al sexto intento el panel contesta
+   "demasiados intentos" durante unos minutos, incluso con la contraseña
+   correcta.
+
+### 6. Tablas nuevas
+
+El panel agrega tres tablas: `crm_usuarios` (las cuentas), `crm_sesiones`
+(las sesiones abiertas) y `crm_intentos_login` (el límite de intentos). Las
+crea `init_db()` al arrancar, igual que las del bot: `create_all` agrega lo
+que falta y **no toca `conversaciones` ni `mensajes`**. Las dos últimas son
+descartables — vaciarlas solo obliga a volver a loguearse.
+
+**Si esa base tuvo alguna vez el CRM con Auth0**, el servidor no arranca y
+dice qué borrar: este proyecto no tiene migraciones, así que una
+`crm_sesiones` de aquella época quedaría con su esquema y sus filas viejas.
+
+```sql
+DROP TABLE IF EXISTS crm_transacciones_oidc;
+DROP TABLE IF EXISTS crm_sesiones;
+```
+
+### Qué se puede hacer en el panel
+
+- Ver la lista de conversaciones, ordenada por actividad más reciente, y
+  filtrar entre todas y las pausadas.
+- Leer el historial completo, con los mensajes del usuario, del bot y de una
+  persona del equipo diferenciados.
+- Ver por qué está pausada una conversación y, si el bot la escaló, el resumen
+  que dejó el modelo.
+- **Reactivar bot**: levanta la pausa. No manda ningún mensaje ni reprocesa lo
+  que llegó durante la pausa — el bot responde recién con el próximo mensaje
+  entrante. Es lo mismo que hace `scripts/resetear_modo_humano.py`, con la
+  misma función por debajo.
+
+No se puede responder desde el panel: para eso está WhatsApp.
+
+### Lo que falta probar
+
+El login está probado con la suite de tests y, además, contra un **Postgres
+real** en un contenedor de prueba aislado: creación de las tablas, alta de la
+primera cuenta con el comando, login correcto e incorrecto, bloqueo por
+intentos, lectura y reactivación de una conversación, y logout con y sin
+token CSRF.
+
+Falta probarlo **servido por https con un dominio real** y abrir las
+pantallas a mano en un navegador de escritorio y de celular. El checklist
+completo para ponerlo en producción está en `PENDIENTES.md`, sección 1.c.
+
 ## Cambiar el proveedor de respuestas
 
 `PROVEEDOR_IA` selecciona la implementación: `fijo` (sin IA, para tests),
