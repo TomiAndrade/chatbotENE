@@ -441,6 +441,25 @@ button { font: inherit; }
 
 /* ---------- Detalle ---------- */
 
+/* La caja que sostiene el scroll del hilo.
+ *
+ * Tiene que ser flex en columna sí o sí: `.hilo` scrollea gracias a
+ * `flex: 1; min-height: 0; overflow-y: auto`, y esas tres declaraciones no
+ * hacen nada si el padre no es un contenedor flex. Sin esto el hilo crece con
+ * todos los mensajes, `.columna-detalle` (que es `overflow: hidden`) recorta
+ * lo que sobra y no queda forma de llegar a los mensajes de abajo. Ya pasó.
+ *
+ * `min-height: 0` no es decorativo: un ítem flex no baja de su altura de
+ * contenido sin eso, así que el hilo volvería a empujar hacia abajo en vez de
+ * scrollear. Es la misma trampa que ya resuelven `.columna-lista` y `.lista`.
+ */
+.detalle {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .detalle-cabecera {
   display: flex;
   align-items: center;

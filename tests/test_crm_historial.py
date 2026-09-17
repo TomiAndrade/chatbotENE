@@ -271,6 +271,55 @@ def test_el_panel_no_muestra_la_barra_de_error_fuera_de_mostrarError():
     assert "ERROR_SIN_MENSAJE" in javascript
 
 
+# --- El historial tiene que poder scrollear ----------------------------
+#
+# Pasó de verdad: con más mensajes que pantalla, los de abajo quedaban
+# recortados y no había forma de llegar a ellos. `.hilo` ya declaraba
+# `flex: 1; min-height: 0; overflow-y: auto`, pero esas tres no hacen nada si
+# el padre no es un contenedor flex — y el padre, `article#detalle`, no tenía
+# ninguna regla: quedaba `display: block`.
+
+
+def _declaraciones(css: str, clase: str) -> str:
+    """El cuerpo de la regla de esa clase sola (no `.a .b` ni `.a.b`)."""
+    regla = re.search(rf"^\.{re.escape(clase)}\s*\{{([^}}]*)\}}", css, re.MULTILINE)
+    return regla.group(1) if regla else ""
+
+
+def test_el_hilo_scrollea_porque_su_padre_es_una_columna_flex():
+    """El test que habría atajado el bug del historial sin scroll.
+
+    Afirma la cadena entera, que es lo que falla en pedazos: el hilo vive
+    adentro de `#detalle`, `#detalle` declara la columna flex, y el hilo
+    declara el scroll. Si alguien saca cualquiera de las tres, esto falla.
+    """
+    html = _panel_html()
+    css = _crm_css()
+
+    articulo = re.search(r'(<article[^>]*\bid="detalle"[^>]*>)(.*?)</article>', html, re.DOTALL)
+    assert articulo is not None, "no está el contenedor del historial"
+    apertura, adentro = articulo.group(1), articulo.group(2)
+
+    assert 'id="hilo"' in adentro, "el hilo dejó de estar adentro de #detalle"
+
+    clases = re.search(r'class="([^"]*)"', apertura)
+    assert clases is not None and "detalle" in clases.group(1).split(), (
+        "#detalle se quedó sin la clase que le da la columna flex"
+    )
+
+    # Sin `min-height: 0` un ítem flex no baja de su altura de contenido, así
+    # que el hilo empujaría hacia abajo en vez de scrollear.
+    for declaracion in ("display: flex", "flex-direction: column", "min-height: 0", "flex: 1"):
+        assert declaracion in _declaraciones(css, "detalle"), (
+            f".detalle perdió {declaracion!r} y el hilo deja de scrollear"
+        )
+
+    for declaracion in ("overflow-y: auto", "min-height: 0", "flex: 1"):
+        assert declaracion in _declaraciones(css, "hilo"), (
+            f".hilo perdió {declaracion!r} y deja de scrollear"
+        )
+
+
 def test_una_conversacion_escalada_se_muestra_pausada_con_su_motivo(cliente_crm, usuario_crm, db):
     login_crm(cliente_crm, usuario_crm)
     escalada_en = _ahora() - timedelta(minutes=20)
