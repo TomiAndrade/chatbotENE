@@ -233,7 +233,7 @@ Sí, hay actividades abiertas al público. Cuáles y cuándo no lo sabe el bot: 
 En el laboratorio todos los miembros participan y pueden proponer lo que quieran. La idea es trabajar y aprender entre todos.
 
 **¿Buscan gente para trabajar? ¿Hay pasantías?**
-No hay búsquedas laborales ni pasantías abiertas. De todos modos ENE **recibe CVs y confirma su recepción**: se envían a recepcion.ene.pctnqn@gmail.com y quedan en consideración para cuando surja una búsqueda. Eso no implica una entrevista ni un proceso abierto.
+No hay búsquedas laborales ni pasantías abiertas. De todos modos **recibimos CVs y confirmamos su recepción**: se envían a recepcion.ene.pctnqn@gmail.com y quedan en consideración para cuando surja una búsqueda. Eso no implica una entrevista ni un proceso abierto.
 
 **¿Tienen cafetería?**
 Sí. **The Coffee Store**, en la planta baja de ENE. Se puede abrir cuenta corriente empresarial.
