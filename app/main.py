@@ -1,8 +1,8 @@
 """FastAPI: endpoints /webhook y /health.
 
-Flujo de POST /webhook (ver spec-etapa1.md, spec-etapa2.md y
-spec-meta-cloud-api.md). El endpoint hace solo lo mínimo para poder contestar
-200 enseguida:
+Flujo de POST /webhook (ver spec-etapa1.md, spec-etapa2.md,
+spec-meta-cloud-api.md y spec-agrupamiento-mensajes.md). El endpoint hace
+solo lo mínimo para poder contestar 200 enseguida:
 
 1. Verificar firma (X-Hub-Signature-256, Meta).
 2. Si el evento no trae mensajes (p. ej. statuses[] de entrega), ignorar.
@@ -17,8 +17,15 @@ task `procesar_mensaje_entrante`:
 6. Si modo_humano, cortar acá.
 7. Si el número superó el límite de mensajes por hora, cortar (avisando una
    sola vez).
-8. Armar el historial, generar la respuesta y, según lo que haya devuelto el
-   modelo, enviarla, escalar a humano, o ambas cosas.
+8. Según el `type` real del mensaje (ver specs/spec-adjuntos-no-soportados.md):
+   si es texto, sumarse al agrupamiento de la conversación
+   (`agrupar_y_responder`, ver specs/spec-agrupamiento-mensajes.md) — espera
+   una ventana breve por si llegan más mensajes seguidos, arma un solo lote,
+   arma el historial y genera la respuesta, y según lo que haya devuelto el
+   modelo la envía, escala a humano, o ambas cosas; si es cualquier otro tipo
+   (imagen, documento, audio, etc.), responder con un texto fijo pidiendo la
+   consulta por escrito, de inmediato y sin agrupar, sin llamar al modelo ni
+   escalar por eso.
 
 Starlette corre las background tasks en un threadpool y recién después de
 haber mandado la respuesta HTTP, así que las llamadas bloqueantes de
@@ -49,11 +56,14 @@ tests siguen ahí por si más adelante Meta habilita Coexistence.
 
 import json
 import logging
+import threading
 import time
-from datetime import datetime, timezone
+import uuid
+from datetime import datetime, timedelta, timezone
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
+from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 
 from app import mensajes
@@ -64,7 +74,7 @@ from app.db import SessionLocal, crear_engine, init_db, obtener_engine
 from app.historial import construir_historial
 from app.limite import mensajes_ultima_hora
 from app.meta import MetaClient, verificar_challenge, verificar_firma_webhook
-from app.models import CANAL_WHATSAPP, Conversacion, Mensaje, MotivoPausa, RolMensaje
+from app.models import CANAL_WHATSAPP, Conversacion, LlamadaIA, Mensaje, MotivoPausa, ResultadoLlamadaIA, RolMensaje
 from app.pausa import pausa_vigente
 from app.respuesta import ErrorTransitorioProveedor, generar_respuesta
 from app.tiempos import Cronometro
@@ -107,6 +117,21 @@ logger = logging.getLogger("bot")
 app = FastAPI(title="Bot WhatsApp ENE IA LAB")
 meta_client = MetaClient()
 
+# El único `messages[].type` que la Cloud API de Meta manda y que hoy se
+# trata como soportado (ver specs/spec-adjuntos-no-soportados.md). Es el
+# default de `tipo` en `procesar_mensaje_entrante`, a propósito: antes de esa
+# entrega todo mensaje se trataba como texto, y ningún llamador interno que
+# no conozca la metadata real del webhook tiene por qué cambiar.
+TIPO_TEXTO = "text"
+
+# Referencia de módulo reemplazable, no una llamada directa a time.sleep en
+# cada punto donde hace falta esperar (ver specs/spec-agrupamiento-mensajes.md,
+# "Tests"). Los tests que necesitan controlar con precisión cuándo se
+# intercala un mensaje nuevo durante la ventana de agrupamiento reemplazan
+# `main.dormir` por una función sincronizada con threading.Event, en vez de
+# depender de que el reloj real coincida con el tiempo de ejecución del test.
+dormir = time.sleep
+
 # El CRM (panel de conversaciones) se monta solo si está prendido: con
 # CRM_HABILITADO=false no se registra ninguna de sus rutas y `/crm` responde
 # 404 como cualquier URL inexistente. Un servidor que solo atiende el webhook
@@ -143,6 +168,13 @@ def al_iniciar() -> None:
 
     if config.crm_habilitado:
         _revisar_crm()
+
+    # Agrupamiento de mensajes (specs/spec-agrupamiento-mensajes.md): retoma
+    # en background cualquier lote que haya quedado pendiente de un proceso
+    # anterior. No se espera a que termine (dispara y sigue) — el server
+    # tiene que poder aceptar requests nuevos ya, no en hasta 28s por cada
+    # conversación recuperada.
+    _recuperar_lotes_pendientes()
 
 
 def _revisar_crm() -> None:
@@ -371,12 +403,53 @@ def escalar_a_humano(db, conversacion: Conversacion, resumen: str | None) -> Non
         )
 
 
-def responder(db, conversacion: Conversacion, mensaje_usuario: Mensaje) -> None:
+def _registrar_llamada_ia(
+    db,
+    conversacion: Conversacion,
+    *,
+    resultado: ResultadoLlamadaIA,
+    duracion_ms: float,
+    escalo: bool,
+    tokens_entrada: int | None = None,
+    tokens_salida: int | None = None,
+) -> None:
+    """Una fila por cada llamada a generar_respuesta() desde responder(),
+    para el dashboard de costos y actividad del CRM (ver
+    specs/spec-dashboard-metricas.md). No guarda contenido de mensajes ni
+    nada que identifique al contacto fuera del id numérico de la
+    conversación.
+
+    Se commitea en el acto, con su propio commit: es un registro de
+    métricas, no algo que tenga que viajar atado a los commits de
+    enviar_y_guardar/escalar_a_humano que vienen después en cada rama de
+    responder()."""
+    db.add(
+        LlamadaIA(
+            conversacion_id=conversacion.id,
+            proveedor=config.proveedor_ia,
+            modelo=config.modelo or None,
+            duracion_ms=round(duracion_ms),
+            resultado=resultado,
+            escalo=escalo,
+            tokens_entrada=tokens_entrada,
+            tokens_salida=tokens_salida,
+        )
+    )
+    db.commit()
+
+
+def responder(db, conversacion: Conversacion, mensajes_agrupados: list[Mensaje]) -> None:
     """Arma el historial, genera la respuesta y actúa según lo que haya
     devuelto el modelo: enviar texto, escalar a humano, o ambas cosas. Si la
     llamada al modelo falla o vuelve vacía sin escalar, se avisa el error y
     se escala de todos modos: una conversación en manos de una persona es
     mejor que una conversación muerta.
+
+    `mensajes_agrupados` es el lote armado por `agrupar_y_responder` (ver
+    specs/spec-agrupamiento-mensajes.md) — uno o más mensajes de texto
+    consecutivos de la misma conversación, en orden cronológico. Se
+    concatenan con un salto de línea para `mensaje_nuevo`: se tratan como un
+    solo turno del usuario, que es la intención de haberlos agrupado.
 
     Excepción: un ErrorTransitorioProveedor (saturación, 429, 5xx, o un error
     de upstream que llegó dentro de un HTTP 200 — ver spec-etapa2.md) en
@@ -389,8 +462,7 @@ def responder(db, conversacion: Conversacion, mensaje_usuario: Mensaje) -> None:
     Ninguna de las ramas de acá abajo vuelve a chequear modo_humano a mano:
     de eso se encargan `enviar_y_guardar` y `escalar_a_humano`, que lo releen
     de la base justo antes de actuar. La lectura que hizo
-    `procesar_mensaje_entrante` ya quedó vieja para cuando el modelo
-    contesta."""
+    `agrupar_y_responder` ya quedó vieja para cuando el modelo contesta."""
     identificador = enmascarar_identificador(conversacion.identificador_externo)
     # MENSAJE_ERROR_GENERICO dice "ya avisamos a una persona del equipo": solo
     # es verdad si el escalamiento está habilitado.
@@ -401,11 +473,13 @@ def responder(db, conversacion: Conversacion, mensaje_usuario: Mensaje) -> None:
     )
 
     cronometro_historial = Cronometro()
-    historial = construir_historial(db, conversacion, mensaje_usuario)
+    historial = construir_historial(db, conversacion, mensajes_agrupados)
     logger.info(
-        "TIEMPOS %s | historial: %.0f ms (%s mensajes)",
-        identificador, cronometro_historial.ms(), len(historial),
+        "TIEMPOS %s | historial: %.0f ms (%s mensajes, lote de %s)",
+        identificador, cronometro_historial.ms(), len(historial), len(mensajes_agrupados),
     )
+
+    mensaje_nuevo = "\n".join(m.contenido for m in mensajes_agrupados)
 
     # De punta a punta: incluye el reintento de con_un_reintento, la lectura
     # completa del cuerpo de la respuesta y el parseo, no solo el ida y vuelta
@@ -413,12 +487,18 @@ def responder(db, conversacion: Conversacion, mensaje_usuario: Mensaje) -> None:
     # `con_un_reintento`, y el de headers vs. cuerpo el proveedor.
     cronometro_modelo = Cronometro()
     try:
-        resultado = generar_respuesta(historial=historial, mensaje_nuevo=mensaje_usuario.contenido)
+        resultado = generar_respuesta(historial=historial, mensaje_nuevo=mensaje_nuevo)
     except ErrorTransitorioProveedor as error:
-        logger.info("TIEMPOS %s | modelo (fallo transitorio): %.0f ms", identificador, cronometro_modelo.ms())
+        duracion_ms = cronometro_modelo.ms()
+        logger.info("TIEMPOS %s | modelo (fallo transitorio): %.0f ms", identificador, duracion_ms)
         logger.warning(
             "Error transitorio del proveedor de IA para %s: %s",
             enmascarar_identificador(conversacion.identificador_externo), error,
+        )
+        escala = not config.debug
+        _registrar_llamada_ia(
+            db, conversacion, resultado=ResultadoLlamadaIA.ERROR_TRANSITORIO,
+            duracion_ms=duracion_ms, escalo=escala,
         )
         if config.debug:
             enviar_y_guardar(db, conversacion, mensajes.MENSAJE_ERROR_TRANSITORIO)
@@ -430,24 +510,38 @@ def responder(db, conversacion: Conversacion, mensaje_usuario: Mensaje) -> None:
             )
         return
     except Exception:
-        logger.info("TIEMPOS %s | modelo (fallo): %.0f ms", identificador, cronometro_modelo.ms())
+        duracion_ms = cronometro_modelo.ms()
+        logger.info("TIEMPOS %s | modelo (fallo): %.0f ms", identificador, duracion_ms)
         logger.exception(
             "Falló la llamada al modelo para %s", enmascarar_identificador(conversacion.identificador_externo),
+        )
+        _registrar_llamada_ia(
+            db, conversacion, resultado=ResultadoLlamadaIA.ERROR, duracion_ms=duracion_ms, escalo=True,
         )
         enviar_y_guardar(db, conversacion, mensaje_de_error)
         escalar_a_humano(db, conversacion, resumen="Error automático: no se pudo generar una respuesta.")
         return
 
-    logger.info("TIEMPOS %s | modelo (punta a punta): %.0f ms", identificador, cronometro_modelo.ms())
+    duracion_ms = cronometro_modelo.ms()
+    logger.info("TIEMPOS %s | modelo (punta a punta): %.0f ms", identificador, duracion_ms)
 
     if (not resultado.texto or not resultado.texto.strip()) and not resultado.escalar:
         logger.error(
             "El modelo devolvió una respuesta vacía sin escalar para %s",
             enmascarar_identificador(conversacion.identificador_externo),
         )
+        _registrar_llamada_ia(
+            db, conversacion, resultado=ResultadoLlamadaIA.VACIO, duracion_ms=duracion_ms, escalo=True,
+            tokens_entrada=resultado.tokens_entrada, tokens_salida=resultado.tokens_salida,
+        )
         enviar_y_guardar(db, conversacion, mensaje_de_error)
         escalar_a_humano(db, conversacion, resumen="Error automático: el modelo no generó una respuesta.")
         return
+
+    _registrar_llamada_ia(
+        db, conversacion, resultado=ResultadoLlamadaIA.OK, duracion_ms=duracion_ms, escalo=resultado.escalar,
+        tokens_entrada=resultado.tokens_entrada, tokens_salida=resultado.tokens_salida,
+    )
 
     if resultado.texto:
         enviar_y_guardar(db, conversacion, resultado.texto)
@@ -456,9 +550,310 @@ def responder(db, conversacion: Conversacion, mensaje_usuario: Mensaje) -> None:
         escalar_a_humano(db, conversacion, resultado.resumen)
 
 
-def procesar_mensaje_entrante(identificador_externo: str, wa_message_id: str, contenido: str) -> None:
-    """Pasos 4 a 7 del flujo. Corre en background: la request del webhook ya
+# --- Agrupamiento de mensajes consecutivos (specs/spec-agrupamiento-mensajes.md) --
+
+
+def _reclamar_generacion(db, conversacion: Conversacion) -> str | None:
+    """Intenta tomar la reserva de "estoy generando una respuesta para esta
+    conversación" con un único UPDATE condicional — atómico a nivel de fila
+    sin importar cuántos hilos o procesos lo intenten a la vez, porque lo
+    resuelve el motor de base, no este proceso (misma idea que la dedup por
+    wa_message_id, ver CLAUDE.md).
+
+    Devuelve un token si la reserva se tomó (rowcount == 1), o None si ya
+    había una vigente — tomada hace menos de AGRUPAR_ABANDONO_SEGUNDOS por
+    cualquier dueño, este proceso u otro. Una reserva más vieja que eso se
+    considera abandonada (el dueño se cayó a mitad de camino) y se puede
+    retomar."""
+    ahora = datetime.now(timezone.utc)
+    umbral_abandono = ahora - timedelta(seconds=config.agrupar_abandono_segundos)
+    token = uuid.uuid4().hex
+
+    filas = (
+        db.query(Conversacion)
+        .filter(
+            Conversacion.id == conversacion.id,
+            or_(Conversacion.generando_desde.is_(None), Conversacion.generando_desde < umbral_abandono),
+        )
+        # synchronize_session=False: sin esto, Query.update() reevalúa el
+        # WHERE en Python contra el objeto ya cargado en la sesión, y ese
+        # objeto puede traer generando_desde naive (SQLite lo devuelve así
+        # aunque la columna sea DateTime(timezone=True), ver el docstring de
+        # pausa_vigente en app/pausa.py) — comparado contra `umbral_abandono`
+        # (aware) revienta con TypeError. No hace falta que el ORM sincronice
+        # nada acá: donde importa tener el valor fresco ya se hace
+        # db.refresh(conversacion) explícito.
+        .update({"generando_desde": ahora, "generando_token": token}, synchronize_session=False)
+    )
+    db.commit()
+    return token if filas == 1 else None
+
+
+def _liberar_generacion(db, conversacion: Conversacion, token: str) -> None:
+    """Suelta la reserva, pero solo si `token` sigue siendo el dueño actual.
+
+    Sin esta condición, liberar "a ciegas" (solo mirando que generando_desde
+    no sea NULL) podría borrarle la reserva a otro proceso que la retomó de
+    buena fe creyendo que la nuestra había quedado abandonada — exactamente
+    el caso de un procesamiento que tardó más de AGRUPAR_ABANDONO_SEGUNDOS
+    sin haberse caído de verdad."""
+    db.query(Conversacion).filter(
+        Conversacion.id == conversacion.id,
+        Conversacion.generando_token == token,
+    ).update({"generando_desde": None, "generando_token": None}, synchronize_session=False)
+    db.commit()
+
+
+def _avanzar_marca_de_agrupado(db, conversacion: Conversacion, mensaje_id: int) -> None:
+    """Mueve `ultimo_mensaje_agrupado_id` a `mensaje_id`, pero nunca hacia
+    atrás — mismo patrón de UPDATE condicional que `_reclamar_generacion`,
+    por la misma razón: hay más de un llamador que puede escribir esta
+    columna sin coordinarse entre sí (el dueño del lote, al terminar de
+    responder; y `procesar_mensaje_entrante`, cuando un mensaje de texto no
+    llega a entrar a ningún lote porque superó el límite por hora). Sin un
+    UPDATE atómico que solo avance el valor, el que commitea último "gana"
+    sin importar cuál de los dos mensajes es más nuevo, y un mensaje que ya
+    se marcó como fuera de lote podría volver a quedar pendiente."""
+    db.query(Conversacion).filter(
+        Conversacion.id == conversacion.id,
+        or_(
+            Conversacion.ultimo_mensaje_agrupado_id.is_(None),
+            Conversacion.ultimo_mensaje_agrupado_id < mensaje_id,
+        ),
+    ).update({"ultimo_mensaje_agrupado_id": mensaje_id}, synchronize_session=False)
+    db.commit()
+
+
+def _mensajes_pendientes_de_texto(db, conversacion: Conversacion) -> list[Mensaje]:
+    """Mensajes de texto (rol usuario, tipo TIPO_TEXTO) todavía no incluidos
+    en ningún lote procesado, en orden cronológico. Filtra por `tipo`, no por
+    el contenido guardado — un adjunto no soportado nunca entra acá, sin
+    importar qué texto tenga su placeholder (ver
+    specs/spec-adjuntos-no-soportados.md sobre por qué esa distinción no se
+    hace por coincidencia textual)."""
+    consulta = db.query(Mensaje).filter(
+        Mensaje.conversacion_id == conversacion.id,
+        Mensaje.rol == RolMensaje.USUARIO,
+        Mensaje.tipo == TIPO_TEXTO,
+    )
+    if conversacion.ultimo_mensaje_agrupado_id is not None:
+        consulta = consulta.filter(Mensaje.id > conversacion.ultimo_mensaje_agrupado_id)
+    return consulta.order_by(Mensaje.creado_en.asc(), Mensaje.id.asc()).all()
+
+
+def _ultimo_id_pendiente(db, conversacion: Conversacion) -> int | None:
+    lote = _mensajes_pendientes_de_texto(db, conversacion)
+    return lote[-1].id if lote else None
+
+
+def _esperar_ventana_de_agrupamiento(db, conversacion: Conversacion) -> None:
+    """Espera en vueltas de AGRUPAR_VENTANA_SEGUNDOS, y se corta apenas pasa
+    una vuelta entera sin que llegue nada nuevo (ráfaga terminada) o al
+    llegar a AGRUPAR_ESPERA_MAXIMA_SEGUNDOS desde que arrancó (tope duro,
+    para que una ráfaga continua no posponga la respuesta para siempre)."""
+    inicio = datetime.now(timezone.utc)
+    ultimo_id_visto = _ultimo_id_pendiente(db, conversacion)
+    while True:
+        dormir(config.agrupar_ventana_segundos)
+        ultimo_id_ahora = _ultimo_id_pendiente(db, conversacion)
+        if ultimo_id_ahora == ultimo_id_visto:
+            return
+        if (datetime.now(timezone.utc) - inicio).total_seconds() >= config.agrupar_espera_maxima_segundos:
+            return
+        ultimo_id_visto = ultimo_id_ahora
+
+
+def agrupar_y_responder(db, conversacion: Conversacion) -> None:
+    """Punto de entrada del agrupamiento para un mensaje de texto recién
+    guardado (ver specs/spec-agrupamiento-mensajes.md). Quien no gana la
+    reserva no hace nada más: su mensaje ya quedó guardado y el dueño actual
+    lo va a recoger, sea porque todavía está esperando (se suma al mismo
+    lote) o porque ya terminó y vuelve a mirar si hay pendientes (arranca un
+    lote nuevo, sin soltar la reserva entre uno y otro)."""
+    token = _reclamar_generacion(db, conversacion)
+    if token is None:
+        logger.info(
+            "Ya hay una generación en curso para %s, este mensaje se suma al lote en curso",
+            enmascarar_identificador(conversacion.identificador_externo),
+        )
+        return
+
+    try:
+        while True:
+            _esperar_ventana_de_agrupamiento(db, conversacion)
+
+            db.refresh(conversacion)
+            if pausa_vigente(conversacion, datetime.now(timezone.utc)):
+                logger.info(
+                    "La conversación con %s pasó a modo humano mientras se agrupaba: el "
+                    "lote pendiente queda para la próxima vez que alguien escriba",
+                    enmascarar_identificador(conversacion.identificador_externo),
+                )
+                return
+
+            lote = _mensajes_pendientes_de_texto(db, conversacion)
+            if not lote:
+                return
+
+            logger.info(
+                "TIEMPOS %s | lote agrupado: %s mensaje(s)",
+                enmascarar_identificador(conversacion.identificador_externo), len(lote),
+            )
+
+            responder(db, conversacion, lote)
+
+            # Se actualiza recién después de que responder() vuelve, nunca
+            # antes: así un reinicio a mitad de la llamada al modelo no
+            # pierde el lote, lo reprocesa (ver "Reinicios y recuperación"
+            # en el spec). El avance es monótono (ver
+            # `_avanzar_marca_de_agrupado`) porque `procesar_mensaje_entrante`
+            # también puede escribir esta columna, sin tomar la reserva, para
+            # un mensaje que quedó fuera de lote por el límite por hora.
+            _avanzar_marca_de_agrupado(db, conversacion, lote[-1].id)
+
+            db.refresh(conversacion)
+            if not _mensajes_pendientes_de_texto(db, conversacion):
+                return
+            # Llegaron mensajes nuevos mientras se generaba la respuesta: se
+            # vuelve a esperar la ventana para ese lote nuevo, sin soltar la
+            # reserva — es la misma conversación, el mismo dueño.
+    finally:
+        _liberar_generacion(db, conversacion, token)
+
+
+def _conversaciones_con_texto_pendiente(db) -> list[int]:
+    """Ids de conversación con al menos un mensaje de texto de usuario que
+    todavía no entró a ningún lote (ver `_mensajes_pendientes_de_texto`), sin
+    importar el estado de la reserva — eso lo arbitra `_reclamar_generacion`
+    cuando se intente recuperar cada una."""
+    filas = (
+        db.query(Mensaje.conversacion_id)
+        .join(Conversacion, Conversacion.id == Mensaje.conversacion_id)
+        .filter(
+            Mensaje.rol == RolMensaje.USUARIO,
+            Mensaje.tipo == TIPO_TEXTO,
+            or_(
+                Conversacion.ultimo_mensaje_agrupado_id.is_(None),
+                Mensaje.id > Conversacion.ultimo_mensaje_agrupado_id,
+            ),
+        )
+        .distinct()
+        .all()
+    )
+    return [id_ for (id_,) in filas]
+
+
+def _recuperar_lote_pendiente(conversacion_id: int) -> None:
+    """Reintenta `agrupar_y_responder` para una conversación puntual, con su
+    propia sesión — pensada para correr en su propio hilo, ver
+    `_recuperar_lotes_pendientes`."""
+    db = SessionLocal()
+    try:
+        conversacion = db.query(Conversacion).filter_by(id=conversacion_id).one_or_none()
+        if conversacion is None:
+            return
+        agrupar_y_responder(db, conversacion)
+    except Exception:
+        logger.error(
+            "Error inesperado recuperando el lote pendiente de la conversación id=%s",
+            conversacion_id, exc_info=True,
+        )
+    finally:
+        db.close()
+
+
+def _recuperar_lotes_pendientes() -> list[threading.Thread]:
+    """Al arrancar, retoma cualquier lote de agrupamiento que haya quedado a
+    medias porque el proceso anterior murió con la reserva tomada (ver
+    specs/spec-agrupamiento-mensajes.md, "Reinicios y recuperación"). Sin
+    esto, esos mensajes quedan esperando en silencio hasta que la persona
+    escriba un mensaje nuevo — podían pasar horas, o no pasar nunca.
+
+    Un hilo por conversación, para no bloquear el arranque del server con
+    hasta `AGRUPAR_ESPERA_MAXIMA_SEGUNDOS` + `PRESUPUESTO_TOTAL_SEGUNDOS` de
+    cada una. **Funciona igual con más de un proceso corriendo**: no asume
+    que este proceso es el único que puede haber quedado con la reserva, ni
+    el único que arranca a la vez que otro — `agrupar_y_responder` sigue
+    arbitrando todo a través de `_reclamar_generacion`, así que si la
+    reserva de una conversación sigue vigente (otro proceso la tomó hace
+    poco y todavía la está usando de verdad) este hilo no hace nada
+    (`token is None`), sin pisarle el trabajo a nadie.
+
+    Devuelve los hilos que arrancó — `al_iniciar()` no los espera (dispara y
+    sigue), pero los tests sí, para poder afirmar el resultado antes de
+    terminar."""
+    db = SessionLocal()
+    try:
+        ids_pendientes = _conversaciones_con_texto_pendiente(db)
+    finally:
+        db.close()
+
+    if ids_pendientes:
+        logger.info("Recuperando %s conversación(es) con un lote de agrupamiento pendiente", len(ids_pendientes))
+
+    hilos = []
+    for conversacion_id in ids_pendientes:
+        hilo = threading.Thread(target=_recuperar_lote_pendiente, args=(conversacion_id,), daemon=True)
+        hilo.start()
+        hilos.append(hilo)
+    return hilos
+
+
+def responder_adjunto_no_soportado(db, conversacion: Conversacion, tipo: str | None) -> None:
+    """Un mensaje que no es texto (imagen, documento, audio, o cualquier otro
+    `type` que la Cloud API de Meta pueda mandar) no arma historial ni llama
+    a `generar_respuesta`, y no escala por sí mismo: solo responde con el
+    texto fijo que corresponda y pide la consulta por escrito (ver
+    specs/spec-adjuntos-no-soportados.md). `enviar_y_guardar` se encarga de
+    releer modo_humano antes de mandar nada, igual que con cualquier otro
+    envío."""
+    enviar_y_guardar(db, conversacion, mensajes.mensaje_adjunto_no_soportado(tipo))
+
+
+def procesar_mensaje_entrante(
+    identificador_externo: str,
+    wa_message_id: str,
+    contenido: str,
+    tipo: str | None = TIPO_TEXTO,
+    *,
+    disparar_agrupamiento: bool = True,
+) -> None:
+    """Pasos 4 a 8 del flujo. Corre en background: la request del webhook ya
     devolvió 200 antes de que esto empiece.
+
+    Los primeros cuatro parámetros son los de siempre, en el mismo orden
+    que antes de esta entrega (ver specs/spec-meta-cloud-api.md, "principio
+    rector", y specs/spec-adjuntos-no-soportados.md sobre `tipo`): nada que
+    ya llame a esta función con esos cuatro argumentos necesita tocarse.
+    `disparar_agrupamiento` es nuevo, solo por keyword y con default `True`
+    — ese default preserva el comportamiento de siempre (guardar Y generar
+    la respuesta agrupada en la misma llamada) para cualquier llamador que
+    no sepa nada del agrupamiento (los tests que llaman esta función
+    directo, y el caso común del webhook con un solo mensaje por contacto
+    en el payload).
+
+    **`disparar_agrupamiento=False` es lo que usa `_procesar_cambio` cuando
+    un mismo payload de Meta trae más de un mensaje de texto del mismo
+    contacto** (ver specs/spec-agrupamiento-mensajes.md, "Varios mensajes de
+    texto del mismo contacto en un mismo POST"). Starlette ejecuta las
+    `BackgroundTasks` de una misma respuesta en orden, una después de la
+    otra — no en paralelo —, así que si esta función agrupara y respondiera
+    ahí mismo, el primer mensaje se quedaría esperando la ventana de
+    agrupamiento (y después llamando al modelo, hasta 20s) antes de que el
+    segundo mensaje del mismo contacto llegara siquiera a guardarse. Con
+    `disparar_agrupamiento=False` esta función solo hace los pasos 4 a 7
+    (guardar, pausa, límite) y vuelve enseguida; es `_procesar_cambio` quien
+    encola una tarea aparte, después de todas las de guardado, para recién
+    ahí llamar a `agrupar_y_responder` — momento en el que todos los
+    mensajes del payload ya están guardados y el lote los encuentra a
+    todos.
+
+    `tipo` decide, recién en el paso 8, si se agrupa (`tipo == TIPO_TEXTO`)
+    o si alcanza con el texto fijo de adjunto no soportado
+    (`responder_adjunto_no_soportado`, que no espera nada y no le importa
+    `disparar_agrupamiento`). Nunca se decide comparando `contenido` contra
+    el marcador — un usuario que escribe a mano algo parecido al marcador
+    tiene `tipo == "text"` y sigue el camino normal.
 
     El webhook solo atiende WhatsApp por ahora, así que el canal queda
     hardcodeado acá; cuando exista otro canal, esta función pasa a recibirlo
@@ -496,6 +891,7 @@ def procesar_mensaje_entrante(identificador_externo: str, wa_message_id: str, co
             rol=RolMensaje.USUARIO,
             contenido=contenido,
             wa_message_id=wa_message_id,
+            tipo=tipo,
         )
         db.add(mensaje_usuario)
         conversacion.ultimo_mensaje_en = datetime.now(timezone.utc)
@@ -536,9 +932,27 @@ def procesar_mensaje_entrante(identificador_externo: str, wa_message_id: str, co
                     enmascarar_identificador(identificador_externo), conteo_ultima_hora,
                 )
                 enviar_y_guardar(db, conversacion, mensajes.MENSAJE_LIMITE_ALCANZADO)
+            if tipo == TIPO_TEXTO:
+                # Este mensaje nunca va a entrar a un lote: sin esto, la
+                # tarea de agrupamiento que `_procesar_cambio` encola aparte
+                # (con `disparar_agrupamiento=False` acá arriba, ver el
+                # docstring de esta función) lo encontraría igual como
+                # pendiente y llamaría al modelo pasando por encima del
+                # límite — `agrupar_y_responder` no conoce el límite por
+                # hora, solo mira qué quedó sin marcar. El avance es
+                # monótono (`_avanzar_marca_de_agrupado`) porque puede
+                # correr en paralelo con el dueño de un lote en curso.
+                _avanzar_marca_de_agrupado(db, conversacion, mensaje_usuario.id)
             return
 
-        responder(db, conversacion, mensaje_usuario)
+        if tipo == TIPO_TEXTO:
+            if disparar_agrupamiento:
+                agrupar_y_responder(db, conversacion)
+            # Si no, `_procesar_cambio` ya encoló una tarea aparte que va a
+            # llamar a agrupar_y_responder después de que todos los mensajes
+            # de este mismo payload se hayan guardado.
+        else:
+            responder_adjunto_no_soportado(db, conversacion, tipo)
     except Exception as error:
         logger.error(
             "Error inesperado procesando el mensaje de %s (wa_message_id=%s): %s: %s",
@@ -637,9 +1051,12 @@ def _extraer_contenido(mensaje: dict) -> str:
     payload aún con forma de Kapso que usa el saliente dormido) al texto a
     guardar. Comparte esta lógica el mensaje entrante y el saliente de la
     secretaría: los dos pueden venir con tipos no soportados (una imagen, un
-    audio)."""
+    audio). Solo guarda el marcador para historial y diagnóstico — qué se le
+    responde al usuario por un tipo no soportado lo decide
+    `responder_adjunto_no_soportado`, a partir del `type` real, no de este
+    texto."""
     tipo = mensaje.get("type")
-    if tipo == "text":
+    if tipo == TIPO_TEXTO:
         return mensaje.get("text", {}).get("body", "")
     return f"[mensaje de tipo '{tipo}' no soportado en esta etapa]"
 
@@ -719,15 +1136,58 @@ def _cuerpo_para_loguear(cuerpo_crudo: bytes, limite: int = 2000) -> str:
     return texto
 
 
+def _disparar_agrupamiento_pendiente(identificador_externo: str) -> None:
+    """Llama a `agrupar_y_responder` para una conversación, en su propia
+    background task — la que `_procesar_cambio` encola después de TODAS las
+    de guardado de un mismo payload (ver el docstring de
+    `procesar_mensaje_entrante` sobre `disparar_agrupamiento`, y
+    specs/spec-agrupamiento-mensajes.md). Para cuando esto corre, cualquier
+    mensaje hermano del mismo contacto en el mismo payload ya se guardó, así
+    que el lote los encuentra a todos — sin importar si son uno o varios.
+
+    Es seguro llamarla aunque, al final, no haya nada pendiente (por
+    ejemplo, si el único mensaje de texto de ese contacto en el payload
+    resultó ser un duplicado, o la conversación está pausada):
+    `agrupar_y_responder` ya maneja esos casos como no-op."""
+    db = SessionLocal()
+    try:
+        conversacion = buscar_o_crear_conversacion(db, CANAL_WHATSAPP, identificador_externo)
+        agrupar_y_responder(db, conversacion)
+    except Exception:
+        logger.error(
+            "Error inesperado dispando el agrupamiento pendiente de %s",
+            enmascarar_identificador(identificador_externo), exc_info=True,
+        )
+    finally:
+        db.close()
+
+
 def _procesar_cambio(value: dict, background_tasks: BackgroundTasks) -> None:
     """Un `changes[].value` del payload de Meta. Si no trae `messages`, es un
     evento de otro tipo (típicamente `statuses[]`, la confirmación de
     entrega) y no hay nada que hacer: se ignora explícitamente, no por
-    descarte (spec-meta-cloud-api.md, sección 2)."""
+    descarte (spec-meta-cloud-api.md, sección 2).
+
+    Encola dos tandas de background tasks, en este orden — Starlette las
+    corre en el orden en que se agregan, una después de la otra (ver
+    specs/spec-agrupamiento-mensajes.md, "Varios mensajes de texto del mismo
+    contacto en un mismo POST"):
+
+    1. Una por cada mensaje del payload, con `disparar_agrupamiento=False`:
+       guardan (dedup, pausa, límite) y, si es un adjunto, responden de
+       inmediato — pero ningún mensaje de texto agrupa ni llama al modelo
+       todavía.
+    2. Una por cada contacto distinto que tuvo al menos un mensaje de texto
+       en este payload, recién después de todas las de arriba: ahí sí se
+       dispara `agrupar_y_responder`, cuando ya no puede quedar ningún
+       mensaje hermano sin guardar.
+    """
     mensajes_entrantes = value.get("messages")
     if not mensajes_entrantes:
         logger.debug("Cambio de webhook sin messages (statuses u otro evento), se ignora: %s", value)
         return
+
+    identificadores_con_texto: list[str] = []
 
     for mensaje in mensajes_entrantes:
         wa_message_id = mensaje.get("id")
@@ -735,13 +1195,27 @@ def _procesar_cambio(value: dict, background_tasks: BackgroundTasks) -> None:
         # sección 3): el "9" de los números argentinos puede estar o no, y
         # tocarlo rompe la búsqueda de conversación o el envío.
         identificador_externo = mensaje.get("from")
+        tipo = mensaje.get("type")
         contenido = _extraer_contenido(mensaje)
 
         if not identificador_externo or not wa_message_id:
             logger.warning("Mensaje de webhook incompleto, se descarta: %s", mensaje)
             continue
 
-        background_tasks.add_task(procesar_mensaje_entrante, identificador_externo, wa_message_id, contenido)
+        # `tipo` va siempre explícito, incluido cuando es None (payload sin
+        # `type`): este es el único llamador que conoce la metadata real del
+        # mensaje, así que es el único que no puede confiar en el default de
+        # `procesar_mensaje_entrante`.
+        background_tasks.add_task(
+            procesar_mensaje_entrante,
+            identificador_externo, wa_message_id, contenido, tipo=tipo, disparar_agrupamiento=False,
+        )
+
+        if tipo == TIPO_TEXTO and identificador_externo not in identificadores_con_texto:
+            identificadores_con_texto.append(identificador_externo)
+
+    for identificador_externo in identificadores_con_texto:
+        background_tasks.add_task(_disparar_agrupamiento_pendiente, identificador_externo)
 
 
 @app.get("/health")

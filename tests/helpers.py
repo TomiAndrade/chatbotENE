@@ -92,6 +92,27 @@ def payload_meta_texto(wa_message_id: str, telefono: str, texto: str) -> dict:
     return payload_meta_mensajes([mensaje_meta_texto(wa_message_id, telefono, texto)])
 
 
+def mensaje_meta_adjunto(wa_message_id: str, telefono: str, tipo: str | None) -> dict:
+    """Un mensaje con `type` distinto de `text` (o sin `type`), como una
+    imagen, un documento o un audio — ver specs/spec-adjuntos-no-soportados.md.
+    No arma el bloque específico del tipo (`image`, `document`, etc.): a
+    `_extraer_contenido`/`responder_adjunto_no_soportado` solo les importa el
+    valor de `type`, no el resto de la forma que tiene cada adjunto real."""
+    mensaje = {
+        "from": telefono,
+        "id": wa_message_id,
+        "timestamp": "1735689600",
+    }
+    if tipo is not None:
+        mensaje["type"] = tipo
+    return mensaje
+
+
+def payload_meta_adjunto(wa_message_id: str, telefono: str, tipo: str | None) -> dict:
+    """El caso común de los tests de adjuntos: un solo mensaje no-texto."""
+    return payload_meta_mensajes([mensaje_meta_adjunto(wa_message_id, telefono, tipo)])
+
+
 def payload_meta_statuses(wa_message_id: str, telefono: str, status: str = "delivered") -> dict:
     """Payload de confirmación de entrega: `value` trae `statuses[]` en vez
     de `messages[]` (spec-meta-cloud-api.md, sección 2). Hay que descartarlo

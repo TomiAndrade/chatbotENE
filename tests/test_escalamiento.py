@@ -9,7 +9,6 @@ cualquier cosa.
 """
 
 import json
-import threading
 from datetime import datetime, timezone
 
 from app import main as main_mod
@@ -182,80 +181,21 @@ def test_si_falla_el_envio_del_aviso_el_escalamiento_queda_igual(escalamiento_ac
 
 
 # --- Carrera entre una respuesta lenta y un escalamiento --------------------
-
-
-def test_el_bot_no_escribe_encima_de_un_humano(escalamiento_activo, meta_enviados, monkeypatch):
-    """Dos mensajes concurrentes del mismo número: el primero tarda en el
-    modelo y el segundo escala mientras tanto. Cuando el primero vuelve, la
-    conversación ya está en modo humano y su respuesta no tiene que salir.
-
-    Es el escenario que rompía el criterio de aceptación 4 del spec-etapa2.md:
-    el chequeo de modo_humano se hacía una sola vez, antes de llamar al
-    modelo, y quedaba viejo para cuando el modelo contestaba.
-    """
-    ya_escalo = threading.Event()
-    entro_al_modelo = threading.Event()
-
-    def modelo(historial, mensaje_nuevo):
-        if mensaje_nuevo == "consulta lenta":
-            entro_al_modelo.set()
-            assert ya_escalo.wait(timeout=5), "el mensaje que escala nunca terminó"
-            return RespuestaGenerada(texto="respuesta tardía", escalar=False, resumen=None)
-        return RespuestaGenerada(texto=None, escalar=True, resumen="escala mientras el otro piensa")
-
-    monkeypatch.setattr(main_mod, "generar_respuesta", modelo)
-
-    lento = threading.Thread(
-        target=main_mod.procesar_mensaje_entrante,
-        args=(TELEFONO_DE_PRUEBA, "wamid.lento", "consulta lenta"),
-    )
-    lento.start()
-    assert entro_al_modelo.wait(timeout=5), "el mensaje lento nunca llegó al modelo"
-
-    main_mod.procesar_mensaje_entrante(TELEFONO_DE_PRUEBA, "wamid.escala-rapido", "quiero hablar con alguien")
-    ya_escalo.set()
-    lento.join(timeout=5)
-    assert not lento.is_alive()
-
-    conversacion = _conversacion_de_prueba()
-    assert conversacion.modo_humano is True
-
-    textos = [texto for _, texto in meta_enviados]
-    assert "respuesta tardía" not in textos, (
-        f"el bot escribió encima del humano: {textos}"
-    )
-    assert len(textos) == 1
-    assert textos[0] in AVISOS_DE_ESCALAMIENTO
-
-
-def test_una_carrera_no_pisa_el_resumen_del_primer_escalamiento(escalamiento_activo, meta_enviados, monkeypatch):
-    """Si el mensaje lento también quería escalar, el resumen que queda
-    guardado es el del escalamiento que llegó primero: pisarlo con el segundo
-    le sacaría contexto a quien vaya a atender."""
-    ya_escalo = threading.Event()
-    entro_al_modelo = threading.Event()
-
-    def modelo(historial, mensaje_nuevo):
-        if mensaje_nuevo == "consulta lenta":
-            entro_al_modelo.set()
-            assert ya_escalo.wait(timeout=5)
-            return RespuestaGenerada(texto=None, escalar=True, resumen="resumen tardío")
-        return RespuestaGenerada(texto=None, escalar=True, resumen="resumen que llegó primero")
-
-    monkeypatch.setattr(main_mod, "generar_respuesta", modelo)
-
-    lento = threading.Thread(
-        target=main_mod.procesar_mensaje_entrante,
-        args=(TELEFONO_DE_PRUEBA, "wamid.lento2", "consulta lenta"),
-    )
-    lento.start()
-    assert entro_al_modelo.wait(timeout=5)
-
-    main_mod.procesar_mensaje_entrante(TELEFONO_DE_PRUEBA, "wamid.escala-rapido2", "quiero hablar con alguien")
-    ya_escalo.set()
-    lento.join(timeout=5)
-
-    conversacion = _conversacion_de_prueba()
-    assert conversacion.resumen_escalamiento == "resumen que llegó primero"
-    # Un solo aviso, no dos.
-    assert len(meta_enviados) == 1
+#
+# Hasta la entrega 1.2 (agrupamiento de mensajes, ver
+# specs/spec-agrupamiento-mensajes.md) acá había dos tests que hacían
+# competir dos mensajes concurrentes de la MISMA conversación esperando que
+# cada uno disparara su propia llamada a generar_respuesta. Con el
+# agrupamiento esa carrera ya no existe por construcción: el segundo mensaje
+# no logra tomar la reserva de generación mientras la tiene el primero (ver
+# `agrupar_y_responder` en app/main.py) — se suma al lote en curso o queda
+# pendiente para el siguiente, nunca dispara una segunda llamada al modelo en
+# paralelo. La propiedad de seguridad que esos tests protegían ("el bot no
+# escribe encima de un humano") sigue vigente, pero bajo un mecanismo
+# distinto: se prueba en tests/test_agrupamiento.py
+# (test_no_se_genera_respuesta_si_modo_humano_se_activa_durante_la_espera).
+# El caso simétrico donde la respuesta YA se generó y modo_humano se activó
+# mientras tanto lo sigue cubriendo, sin cambios,
+# tests/test_pausa_humana.py::test_secretaria_responde_mientras_el_modelo_genera_el_bot_no_escribe_encima
+# (esa carrera es una sola llamada a procesar_mensaje_entrante, no dos, así
+# que la reserva de agrupamiento no la afecta).

@@ -12,8 +12,17 @@ variable que las relaje (ver la spec, sección "Decisión de diseño").
 from urllib.parse import urlparse
 
 from app.config import Config
+from app.meta import ESPERA_INICIAL_SEGUNDOS, MAX_REINTENTOS
+from app.respuesta import PRESUPUESTO_TOTAL_SEGUNDOS
 
 PROVEEDORES_VALIDOS = frozenset({"fijo", "openai_compat", "claude"})
+
+# Margen fijo sobre el peor caso calculado de abajo, para cubrir latencia
+# real de red/base que las constantes de PRESUPUESTO_TOTAL_SEGUNDOS y
+# MAX_REINTENTOS/ESPERA_INICIAL_SEGUNDOS no capturan (esas miden trabajo de
+# CPU/espera propia, no cuánto tarda de verdad un socket contra Meta o
+# contra Postgres bajo carga).
+MARGEN_ABANDONO_SEGUNDOS = 10.0
 
 # El proyecto usa psycopg2-binary (requirements.txt), que SQLAlchemy resuelve
 # solo para el esquema "postgresql://" sin necesidad de un "+driver"
@@ -83,11 +92,70 @@ def validar_config(config: Config) -> None:
         if _vacio(config.modelo):
             errores.append("MODELO es obligatoria porque PROVEEDOR_IA=claude.")
 
+    errores.extend(_errores_agrupamiento(config))
     errores.extend(_errores_crm(config))
 
     if errores:
         detalle = "\n".join(f"- {error}" for error in errores)
         raise ConfigInvalida(f"Configuración inválida al arrancar:\n{detalle}")
+
+
+def minimo_seguro_agrupar_abandono_segundos(config: Config) -> float:
+    """El piso de AGRUPAR_ABANDONO_SEGUNDOS para que no le robe la reserva a
+    una generación que todavía está en curso, legítimamente (ver
+    specs/spec-agrupamiento-mensajes.md, "Coherencia del timeout de
+    abandono"). Se calcula a partir de las constantes reales del resto del
+    sistema — no se copia el número a mano en un comentario — así que si
+    `PRESUPUESTO_TOTAL_SEGUNDOS` (app/respuesta.py) o los reintentos de
+    envío a Meta (app/meta.py) cambian, esta cuenta se ajusta sola en vez de
+    quedar desincronizada en silencio.
+
+    Peor caso de un lote que sí es legítimo: toda la espera de agrupamiento
+    (`AGRUPAR_ESPERA_MAXIMA_SEGUNDOS`) + la llamada al modelo con su propio
+    reintento (`PRESUPUESTO_TOTAL_SEGUNDOS`) + los reintentos de envío a
+    Meta (backoff de `ESPERA_INICIAL_SEGUNDOS` que se duplica en cada
+    intento, hasta `MAX_REINTENTOS`) + un margen fijo por la latencia real
+    de red/base que ninguna de esas constantes mide.
+    """
+    backoff_envio_meta = sum(
+        ESPERA_INICIAL_SEGUNDOS * (2**intento) for intento in range(MAX_REINTENTOS - 1)
+    )
+    return (
+        config.agrupar_espera_maxima_segundos
+        + PRESUPUESTO_TOTAL_SEGUNDOS
+        + backoff_envio_meta
+        + MARGEN_ABANDONO_SEGUNDOS
+    )
+
+
+def _errores_agrupamiento(config: Config) -> list[str]:
+    """Agrupamiento de mensajes consecutivos (ver
+    specs/spec-agrupamiento-mensajes.md). Los tres AGRUPAR_* tienen que ser
+    positivos — un valor en cero o negativo rompe la lógica de la ventana de
+    espera y del abandono, no solo la vuelve rara — y el abandono tiene que
+    quedar por encima del piso seguro calculado más arriba."""
+    errores: list[str] = []
+
+    for nombre_variable, valor in (
+        ("AGRUPAR_VENTANA_SEGUNDOS", config.agrupar_ventana_segundos),
+        ("AGRUPAR_ESPERA_MAXIMA_SEGUNDOS", config.agrupar_espera_maxima_segundos),
+        ("AGRUPAR_ABANDONO_SEGUNDOS", config.agrupar_abandono_segundos),
+    ):
+        if valor <= 0:
+            errores.append(f"{nombre_variable}={valor!r} tiene que ser mayor a 0.")
+
+    if config.agrupar_espera_maxima_segundos > 0 and config.agrupar_abandono_segundos > 0:
+        minimo = minimo_seguro_agrupar_abandono_segundos(config)
+        if config.agrupar_abandono_segundos <= minimo:
+            errores.append(
+                f"AGRUPAR_ABANDONO_SEGUNDOS={config.agrupar_abandono_segundos!r} es demasiado bajo: "
+                f"tiene que ser mayor a {minimo:.0f}s (AGRUPAR_ESPERA_MAXIMA_SEGUNDOS + el "
+                "presupuesto de la llamada al modelo + los reintentos de envío a Meta + margen). "
+                "Con un valor más bajo, una generación legítima que todavía está en curso puede "
+                "perder su reserva antes de terminar y otro proceso la retoma encima de ella."
+            )
+
+    return errores
 
 
 HOSTS_LOCALES = frozenset({"localhost", "127.0.0.1", "[::1]"})

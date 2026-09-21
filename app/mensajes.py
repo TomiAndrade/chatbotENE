@@ -50,6 +50,42 @@ MENSAJE_ERROR_TRANSITORIO = (
     "Perdón, tuvimos un problema técnico. Probá de nuevo en un momento."
 )
 
+# Textos fijos para adjuntos no soportados (ver specs/spec-adjuntos-no-soportados.md,
+# entrega 1.1 de roadmap-bot-crm.md). No llaman al modelo ni escalan por sí
+# solos: solo piden la consulta por escrito. `image`/`document`/`audio` tienen
+# texto propio porque son los tipos más comunes en WhatsApp; cualquier otro
+# `type` (video, sticker, ubicación, contacto, interactivo, etc.) o su
+# ausencia usa el genérico.
+MENSAJE_ADJUNTO_IMAGEN = (
+    "Por ahora no puedo ver imágenes. Contame tu consulta por escrito y te ayudo."
+)
+
+MENSAJE_ADJUNTO_DOCUMENTO = (
+    "Por ahora no puedo abrir documentos. Contame tu consulta por escrito y te ayudo."
+)
+
+MENSAJE_ADJUNTO_AUDIO = (
+    "Por ahora no puedo escuchar audios. Contame tu consulta por escrito y te ayudo."
+)
+
+MENSAJE_ADJUNTO_GENERICO = (
+    "Por ahora no puedo procesar este tipo de mensaje. Contame tu consulta por "
+    "escrito y te ayudo."
+)
+
+_MENSAJES_ADJUNTO_POR_TIPO = {
+    "image": MENSAJE_ADJUNTO_IMAGEN,
+    "document": MENSAJE_ADJUNTO_DOCUMENTO,
+    "audio": MENSAJE_ADJUNTO_AUDIO,
+}
+
+
+def mensaje_adjunto_no_soportado(tipo: str | None) -> str:
+    """El texto fijo que corresponde a un `messages[].type` que no es
+    `text`. `tipo` viene de la metadata real del webhook, nunca de una
+    coincidencia textual con el marcador guardado en el mensaje."""
+    return _MENSAJES_ADJUNTO_POR_TIPO.get(tipo, MENSAJE_ADJUNTO_GENERICO)
+
 
 def esta_en_horario_atencion(ahora: datetime) -> bool:
     """`ahora` tiene que venir ya convertido a la zona horaria del polo

@@ -65,6 +65,24 @@ class Conversacion(Base):
     resumen_escalamiento = Column(Text, nullable=True)
     escalada_en = Column(DateTime(timezone=True), nullable=True)
 
+    # Agrupamiento de mensajes consecutivos (ver specs/spec-agrupamiento-mensajes.md).
+    # `generando_desde` es NULL cuando nadie está generando una respuesta
+    # para esta conversación; un valor no nulo es la reserva tomada por
+    # `app.main._reclamar_generacion`. `generando_token` identifica a quién
+    # pertenece esa reserva — separado del timestamp porque comparar
+    # timestamps después de un viaje a la base no es seguro (mismo problema
+    # de precisión/tzinfo que documenta app/pausa.py) y porque hace falta
+    # poder distinguir "mi reserva" de "una reserva nueva que retomó la mía
+    # por abandono" al momento de liberarla.
+    generando_desde = Column(DateTime(timezone=True), nullable=True)
+    generando_token = Column(String, nullable=True)
+    # El id del último Mensaje (rol usuario, tipo texto) ya incluido en un
+    # lote procesado. NULL: todavía no se procesó ningún lote. Se actualiza
+    # recién después de que responder() vuelve, nunca antes — así un
+    # reinicio a mitad de la llamada al modelo no pierde el lote, lo
+    # reprocesa (ver "Reinicios y recuperación" en el spec).
+    ultimo_mensaje_agrupado_id = Column(Integer, nullable=True)
+
     mensajes = relationship("Mensaje", back_populates="conversacion")
 
 
@@ -80,5 +98,59 @@ class Mensaje(Base):
     contenido = Column(Text, nullable=False)
     wa_message_id = Column(String, unique=True, nullable=True, index=True)
     creado_en = Column(DateTime(timezone=True), default=ahora_utc, nullable=False)
+    # El `messages[].type` real del webhook de Meta (ver
+    # specs/spec-adjuntos-no-soportados.md), solo para rol=usuario. Decide si
+    # un mensaje entra al agrupamiento (specs/spec-agrupamiento-mensajes.md)
+    # sin mirar `contenido` — la misma razón por la que 1.1 no decide por
+    # coincidencia textual con el marcador de adjunto. NULL para mensajes que
+    # no vienen del webhook con esa semántica (bot, humano).
+    tipo = Column(String, nullable=True)
 
     conversacion = relationship("Conversacion", back_populates="mensajes")
+
+
+class ResultadoLlamadaIA(str, enum.Enum):
+    """Cómo terminó una llamada a generar_respuesta() (ver app/respuesta.py y
+    responder() en app/main.py). Distingue los mismos cuatro caminos que ya
+    distingue responder(): éxito, error transitorio del proveedor (no
+    escala en desarrollo, ver ErrorTransitorioProveedor), cualquier otro
+    error, y respuesta vacía sin escalar."""
+
+    OK = "ok"
+    ERROR_TRANSITORIO = "error_transitorio"
+    ERROR = "error"
+    VACIO = "vacio"
+
+
+class LlamadaIA(Base):
+    """Una fila por cada llamada a generar_respuesta() desde responder(),
+    éxito o fracaso (ver specs/spec-dashboard-metricas.md). Es la fuente del
+    dashboard de costos y actividad del CRM: nunca guarda contenido de
+    mensajes ni el identificador de la conversación fuera del id numérico.
+
+    tokens_entrada/tokens_salida quedan NULL cuando el proveedor no informó
+    uso (pasa siempre con "fijo", y puede pasar con un openai_compat que no
+    devuelva "usage"). Para Claude, tokens_entrada incluye los tokens de
+    caché (creación y lectura) sumados al input fresco — no se separan en
+    columnas propias, ver el spec sobre esa simplificación.
+    """
+
+    __tablename__ = "llamadas_ia"
+
+    id = Column(Integer, primary_key=True)
+    conversacion_id = Column(Integer, ForeignKey("conversaciones.id"), nullable=False, index=True)
+    proveedor = Column(String, nullable=False, index=True)
+    modelo = Column(String, nullable=True, index=True)
+    creado_en = Column(DateTime(timezone=True), default=ahora_utc, nullable=False, index=True)
+    duracion_ms = Column(Integer, nullable=True)
+    resultado = Column(
+        Enum(
+            ResultadoLlamadaIA,
+            values_callable=lambda enum_cls: [e.value for e in enum_cls],
+            name="resultado_llamada_ia",
+        ),
+        nullable=False,
+    )
+    escalo = Column(Boolean, default=False, nullable=False)
+    tokens_entrada = Column(Integer, nullable=True)
+    tokens_salida = Column(Integer, nullable=True)

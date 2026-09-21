@@ -1,5 +1,7 @@
 """Carga de variables de entorno desde .env."""
 
+import json
+import logging
 import os
 from dataclasses import dataclass
 from zoneinfo import ZoneInfo
@@ -7,6 +9,8 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger("config")
 
 
 @dataclass
@@ -34,6 +38,35 @@ class Config:
     escalamiento_habilitado: bool
     crm_habilitado: bool
     crm_base_url: str
+    agrupar_ventana_segundos: float
+    agrupar_espera_maxima_segundos: float
+    agrupar_abandono_segundos: float
+    tarifas_ia: dict[str, dict[str, float]]
+
+
+def _cargar_tarifas_ia() -> dict[str, dict[str, float]]:
+    """Tarifas de IA para el costo estimado del dashboard de métricas (ver
+    specs/spec-dashboard-metricas.md): un JSON en TARIFAS_IA_JSON, nunca un
+    precio hardcodeado acá.
+
+    Formato: {"proveedor:modelo": {"entrada": USD_por_millon, "salida":
+    USD_por_millon}}. Parseo tolerante a propósito — un JSON ausente o mal
+    formado no tiene que tirar abajo el arranque del bot, a diferencia de lo
+    que sí exige validar_config() con la config indispensable: sin tarifa
+    configurada, el dashboard simplemente muestra el costo como N/D.
+    """
+    crudo = os.getenv("TARIFAS_IA_JSON", "").strip()
+    if not crudo:
+        return {}
+    try:
+        datos = json.loads(crudo)
+    except json.JSONDecodeError:
+        logger.warning("TARIFAS_IA_JSON no es JSON válido, se ignora: %r", crudo)
+        return {}
+    if not isinstance(datos, dict):
+        logger.warning("TARIFAS_IA_JSON tiene que ser un objeto JSON, se ignora")
+        return {}
+    return datos
 
 
 def _cargar_config() -> Config:
@@ -81,6 +114,18 @@ def _cargar_config() -> Config:
         # No se deduce del header Host ni de X-Forwarded-*: eso lo pone quien
         # manda el request, así que no sirve para decidir nada de seguridad.
         crm_base_url=os.getenv("CRM_BASE_URL", "").strip().rstrip("/"),
+        # Agrupamiento de mensajes consecutivos (ver
+        # specs/spec-agrupamiento-mensajes.md). Sin validación obligatoria en
+        # validar_config(): son parámetros de comportamiento con default
+        # razonable, no secretos.
+        agrupar_ventana_segundos=float(os.getenv("AGRUPAR_VENTANA_SEGUNDOS", "2")),
+        agrupar_espera_maxima_segundos=float(os.getenv("AGRUPAR_ESPERA_MAXIMA_SEGUNDOS", "8")),
+        # Peor caso legítimo: AGRUPAR_ESPERA_MAXIMA_SEGUNDOS (esperando el
+        # lote) + PRESUPUESTO_TOTAL_SEGUNDOS de app/respuesta.py (20s, la
+        # llamada al modelo) + reintentos de envío de app/meta.py (~3s de
+        # backoff). Con los defaults de acá (8+20+3=31s), 60s deja margen.
+        agrupar_abandono_segundos=float(os.getenv("AGRUPAR_ABANDONO_SEGUNDOS", "60")),
+        tarifas_ia=_cargar_tarifas_ia(),
     )
 
 

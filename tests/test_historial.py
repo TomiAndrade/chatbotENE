@@ -109,3 +109,46 @@ def test_dentro_de_la_validez_no_se_corta(db, monkeypatch):
 
     assert len(historial) == 1
     assert historial[0].contenido == "hola, hace unos días"
+
+
+# --- Un lote agrupado (specs/spec-agrupamiento-mensajes.md) -----------------
+
+
+def test_construir_historial_con_una_lista_excluye_todos_los_ids_del_lote(db):
+    """Ningún mensaje del lote agrupado puede aparecer en su propio
+    historial: ya viaja aparte, concatenado a mano en `mensaje_nuevo`
+    (app/main.py:responder) — si además quedara acá, entraría dos veces al
+    contexto del modelo."""
+    conversacion = _crear_conversacion(db, identificador_externo="5492990000007")
+    ahora = datetime.now(timezone.utc)
+    previo = _agregar_mensaje(db, conversacion, RolMensaje.BOT, "¿en qué te ayudo?", ahora)
+    lote = [
+        _agregar_mensaje(db, conversacion, RolMensaje.USUARIO, "che", ahora + timedelta(seconds=1)),
+        _agregar_mensaje(db, conversacion, RolMensaje.USUARIO, "quería preguntar algo", ahora + timedelta(seconds=2)),
+    ]
+
+    historial = construir_historial(db, conversacion, lote)
+
+    assert historial == [previo]
+    assert all(m.id not in [h.id for h in historial] for m in lote)
+
+
+def test_construir_historial_con_una_lista_usa_el_mas_viejo_del_lote_para_el_corte(db, monkeypatch):
+    """El corte por antigüedad tiene que mirar cuándo arrancó la ráfaga
+    (el mensaje más viejo del lote), no el más nuevo: si se usara el más
+    nuevo, una ráfaga que empezó después de mucho silencio podría colarse
+    como si no hubiera pasado el tiempo."""
+    monkeypatch.setattr(config, "historial_dias_validez", 7)
+
+    conversacion = _crear_conversacion(db, identificador_externo="5492990000008")
+    hace_8_dias = datetime.now(timezone.utc) - timedelta(days=8)
+    _agregar_mensaje(db, conversacion, RolMensaje.USUARIO, "hola, hace mucho", hace_8_dias)
+    ahora = datetime.now(timezone.utc)
+    lote = [
+        _agregar_mensaje(db, conversacion, RolMensaje.USUARIO, "hola de nuevo", ahora),
+        _agregar_mensaje(db, conversacion, RolMensaje.USUARIO, "che, ¿estás?", ahora + timedelta(seconds=1)),
+    ]
+
+    historial = construir_historial(db, conversacion, lote)
+
+    assert historial == []

@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.config import config
-from app.crm import intentos, servicio, sesiones, usuarios
+from app.crm import intentos, metricas, servicio, sesiones, usuarios
 from app.crm.auth import (
     borrar_cookie_de_sesion,
     poner_cookie_de_sesion,
@@ -48,6 +48,7 @@ ARCHIVOS_ESTATICOS = {
     "crm.css": "text/css; charset=utf-8",
     "panel.js": "text/javascript; charset=utf-8",
     "login.js": "text/javascript; charset=utf-8",
+    "metricas.js": "text/javascript; charset=utf-8",
     "logo-ene.png": "image/png",
 }
 
@@ -94,6 +95,15 @@ def pagina_panel(request: Request, db: Session = Depends(obtener_db)):
     if sesion_actual(request, db) is None:
         return RedirectResponse(url="/crm/login", status_code=303)
     return _pagina("panel.html")
+
+
+@router.get("/metricas")
+def pagina_metricas(request: Request, db: Session = Depends(obtener_db)):
+    """El dashboard de costos y actividad (specs/spec-dashboard-metricas.md).
+    Misma sesión que el panel de conversaciones — sin sesión, al login."""
+    if sesion_actual(request, db) is None:
+        return RedirectResponse(url="/crm/login", status_code=303)
+    return _pagina("metricas.html")
 
 
 @router.get("/estaticos/{archivo}")
@@ -287,3 +297,20 @@ def reactivar_conversacion(
 @router.get("/api/motivos")
 def motivos(sesion=Depends(requiere_sesion)):
     return servicio.motivos_legibles()
+
+
+@router.get("/api/metricas")
+def metricas_del_rango(
+    desde: str | None = Query(default=None, description="YYYY-MM-DD"),
+    hasta: str | None = Query(default=None, description="YYYY-MM-DD"),
+    sesion=Depends(requiere_sesion),
+    db: Session = Depends(obtener_db),
+):
+    """El dashboard de costos y actividad (specs/spec-dashboard-metricas.md).
+    Sin `desde`/`hasta`, los últimos 7 días. Nunca devuelve teléfonos ni
+    contenido de mensajes — solo conteos, duraciones y tokens agregados."""
+    try:
+        inicio, fin = metricas.rango_utc(desde, hasta)
+    except metricas.RangoInvalido as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    return metricas.resumen(db, inicio, fin)
