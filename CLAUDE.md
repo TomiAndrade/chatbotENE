@@ -189,6 +189,57 @@ más abajo, sin usarse.
   log, no como error en el panel de Meta. `GET /webhook` (challenge de
   verificación) es la excepción: responde en el mismo request, no hay nada
   que encolar.
+- **Un adjunto no soportado no llama al modelo ni escala por sí mismo**
+  (entrega 1.1 de `specs/roadmap-bot-crm.md`, ver
+  specs/spec-adjuntos-no-soportados.md). `procesar_mensaje_entrante` decide
+  entre `responder()` y `responder_adjunto_no_soportado()` mirando el
+  `messages[].type` real que le pasa el webhook — nunca comparando
+  `contenido` contra el placeholder que se guarda para historial y
+  diagnóstico (`[mensaje de tipo '...' no soportado en esta etapa]`), así un
+  usuario que escribe ese mismo texto a mano (`type == "text"`) sigue el
+  camino normal. `tipo` es el cuarto parámetro de `procesar_mensaje_entrante`,
+  opcional y con default `TIPO_TEXTO` ("text") a propósito: ningún llamador
+  interno que no conozca la metadata del webhook (tests, scripts) necesita
+  tocarse — solo `_procesar_cambio`, que sí la conoce, lo pasa siempre
+  explícito, incluido `None` cuando el payload no trae `type`. El texto fijo
+  de respuesta (uno para `image`/`document`/`audio`, uno genérico para
+  cualquier otro tipo) sale por el mismo `enviar_y_guardar` que cualquier
+  otro envío, así que respeta `modo_humano` y queda en el historial como
+  mensaje del bot igual que cualquier respuesta.
+- **Los mensajes de texto consecutivos se agrupan en una sola llamada al
+  modelo** (entrega 1.2 de `specs/roadmap-bot-crm.md`, ver
+  specs/spec-agrupamiento-mensajes.md). `agrupar_y_responder` (`app/main.py`)
+  reemplaza la llamada directa a `responder()` para `tipo == TIPO_TEXTO`:
+  el primer mensaje de una ráfaga toma una reserva por conversación con un
+  `UPDATE` condicional en la base (`_reclamar_generacion`/
+  `_liberar_generacion`, columnas `generando_desde`/`generando_token` de
+  `Conversacion`) — no un lock ni una cola en memoria de Python, a propósito,
+  para que funcione igual con más de un proceso corriendo la app. Quien no
+  gana la reserva no espera nada: su mensaje ya quedó guardado y el dueño
+  actual lo recoge solo, sea porque todavía está en la ventana de espera
+  (`AGRUPAR_VENTANA_SEGUNDOS`, con un tope duro en
+  `AGRUPAR_ESPERA_MAXIMA_SEGUNDOS`) o porque ya terminó y encuentra
+  pendientes al volver a mirar. `responder()` ahora recibe
+  `mensajes_agrupados: list[Mensaje]` en vez de un solo `Mensaje`: el texto
+  que ve el modelo es esa lista concatenada con `\n`, y `construir_historial`
+  (app/historial.py) generalizó su segundo parámetro para aceptar un
+  `Mensaje` suelto (sin tocar ningún llamador existente) o una lista, y
+  excluir todos sus ids del historial — así ningún mensaje del lote entra
+  dos veces al contexto. **Solo el texto se agrupa**: un adjunto no
+  soportado (`Mensaje.tipo` distinto de `"text"`, columna nueva que guarda
+  el `type` real del webhook) se sigue respondiendo individual e inmediato,
+  sin tocar la reserva — `_mensajes_pendientes_de_texto` filtra por `tipo`,
+  nunca por el contenido guardado, por la misma razón que 1.1 no decide el
+  tipo de un mensaje por coincidencia textual con el placeholder.
+  **Reinicios:** el marcador `ultimo_mensaje_agrupado_id` se actualiza
+  recién después de que `responder()` vuelve, nunca antes, así que un
+  proceso que muere a mitad de la llamada al modelo no pierde el lote —
+  el próximo dueño lo reprocesa entero (con el riesgo acotado de una
+  respuesta duplicada si el proceso viejo llegó a enviarla antes de morir).
+  Una reserva de más de `AGRUPAR_ABANDONO_SEGUNDOS` se considera abandonada
+  y se puede retomar; el token (no el timestamp) es lo que decide si una
+  liberación es válida, para que un dueño viejo que por fin termina no le
+  borre la reserva a quien la retomó por abandono.
 - **Toda la generación de respuestas vive detrás de
   `generar_respuesta(historial, mensaje_nuevo) -> RespuestaGenerada`**
   (`respuesta.py`), seleccionable con `PROVEEDOR_IA` (`fijo`/`openai_compat`/`claude`).
@@ -425,19 +476,55 @@ plantillas, y devolver una conversación de humano a bot **automáticamente**
 
 ## Tests
 
-`tests/` con pytest, 227 tests. No pegan a ninguna API real: Meta se mockea
-(`meta_enviados`, fixture en `tests/conftest.py`) y el proveedor de IA se
-mockea por test parcheando `app.main.generar_respuesta` (`fijo` no necesita
-mock); los dos proveedores con IA se prueban con dobles (`httpx.MockTransport`
-para `openai_compat`, un cliente falso para `claude`). Usan una base SQLite en
-un directorio temporal, no `bot.db`. Cubren: flujo completo del webhook,
-matriz de firma y challenge de Meta, statuses[] descartado, varios mensajes
-en un mismo entry, reintentos de Meta, carrera de entregas concurrentes con
-hilos, armado de historial y corte por antigüedad, mensaje de escalamiento
-según horario, escalamiento por tool calling, fallo del modelo, error
-transitorio del proveedor, límite por número, parseo de tool calls de los
-dos proveedores, y `app/kapso.py` (histórico, sin usarse) con su propia
-matriz de firma y reintentos.
+`tests/` con pytest, 324 tests (contando expansión de parametrize; la cuenta
+de 274 de este archivo era de antes de la entrega de agrupamiento). No
+pegan a ninguna API real: Meta se mockea (`meta_enviados`, fixture en
+`tests/conftest.py`) y el proveedor de IA se mockea por test parcheando
+`app.main.generar_respuesta` (`fijo` no necesita mock); los dos proveedores
+con IA se prueban con dobles (`httpx.MockTransport` para `openai_compat`, un
+cliente falso para `claude`). Usan una base SQLite en un directorio
+temporal, no `bot.db`. Cubren: flujo completo del webhook, matriz de firma y
+challenge de Meta, statuses[] descartado, varios mensajes en un mismo entry,
+reintentos de Meta, carrera de entregas concurrentes con hilos, armado de
+historial y corte por antigüedad, mensaje de escalamiento según horario,
+escalamiento por tool calling, fallo del modelo, error transitorio del
+proveedor, límite por número, parseo de tool calls de los dos proveedores,
+y `app/kapso.py` (histórico, sin usarse) con su propia matriz de firma y
+reintentos.
+
+**Adjuntos no soportados** (`tests/test_adjuntos_no_soportados.py`, ver
+specs/spec-adjuntos-no-soportados.md): texto fijo propio por tipo
+(`image`/`document`/`audio`) y genérico para cualquier otro `type` o su
+ausencia, sin llamar al modelo en ningún caso; un mensaje de texto que imita
+a mano el marcador de adjunto sigue el camino normal (sí llama al modelo);
+dedup, `modo_humano`, límite por hora y varios tipos en el mismo `entry` se
+comportan igual que con un mensaje de texto; y que un fallo al enviar la
+respuesta fija no rompe ni escala. `test_webhook_meta.py` conserva solo la
+verificación mínima de que el placeholder se sigue guardando y el webhook no
+rompe.
+
+**Agrupamiento de mensajes** (`tests/test_agrupamiento.py`, ver
+specs/spec-agrupamiento-mensajes.md): una ráfaga de varios mensajes de texto
+genera una sola llamada al modelo con el contenido concatenado en orden;
+dedup dentro de una ráfaga; dos conversaciones distintas no se bloquean
+entre sí; un adjunto en medio de una ráfaga de texto se responde aparte, sin
+esperar ni entrar al lote; `modo_humano` activado mientras el lote se
+esperaba corta todo sin llamar al modelo, con la reserva liberada y el lote
+sin marcar como procesado; una reserva vieja se puede retomar por abandono;
+dos intentos de reserva simultáneos — solo uno gana; y que liberar con un
+token viejo no le borre la reserva a quien la retomó. Los tests que
+necesitan controlar con precisión cuándo se intercala un mensaje durante la
+ventana de espera reemplazan `main.dormir` por una función sincronizada con
+`threading.Event` (mismo patrón que las carreras de
+`tests/test_escalamiento.py`), en vez de dormir de verdad. `tests/test_historial.py`
+suma dos tests de `construir_historial` con una lista de mensajes en vez de
+uno solo. Dos tests de carrera que tenía `tests/test_escalamiento.py` antes
+de esta entrega (dos mensajes concurrentes a la misma conversación
+generando dos respuestas independientes) quedaron obsoletos por diseño —
+con la reserva por conversación esa carrera ya no puede pasar — y se
+reemplazaron por un comentario que explica por qué, más el test de
+`modo_humano` durante la espera de `test_agrupamiento.py` que cubre la
+misma propiedad de seguridad bajo el mecanismo nuevo.
 
 Del CRM (`test_crm_usuarios.py`, `test_crm_login.py`, `test_crm_acceso.py`,
 `test_crm_esquema_viejo.py`, `test_crm_historial.py`,

@@ -13,19 +13,33 @@ from app.models import Conversacion, Mensaje, RolMensaje
 MARCADOR_HUMANO = "[una persona del equipo respondió]"
 
 
-def construir_historial(db: Session, conversacion: Conversacion, mensaje_actual: Mensaje) -> list[Mensaje]:
+def construir_historial(
+    db: Session, conversacion: Conversacion, mensaje_actual: Mensaje | list[Mensaje]
+) -> list[Mensaje]:
     """Devuelve los mensajes previos a `mensaje_actual`, más recientes primero
     en la consulta y ya invertidos a orden cronológico al devolverlos.
 
+    `mensaje_actual` acepta un `Mensaje` suelto (uso de siempre, sin tocar
+    ningún llamador existente) o una lista — el lote agrupado de
+    specs/spec-agrupamiento-mensajes.md. Se excluyen **todos** los ids del
+    lote de la consulta, así ninguno entra dos veces al contexto del modelo
+    (ni acá ni en el texto armado a mano con el contenido del lote). Para el
+    chequeo de antigüedad se usa el mensaje más viejo del lote: es el que
+    marca cuándo arrancó la ráfaga actual respecto del historial previo.
+
     Si pasaron más de HISTORIAL_DIAS_VALIDEZ días entre el último mensaje
-    anterior y el actual, se ignora todo el historial: el asistente arranca
-    de cero y vuelve a presentarse.
+    anterior y el primero del lote, se ignora todo el historial: el
+    asistente arranca de cero y vuelve a presentarse.
     """
+    mensajes_actuales = mensaje_actual if isinstance(mensaje_actual, list) else [mensaje_actual]
+    ids_actuales = [m.id for m in mensajes_actuales]
+    primero_actual = min(mensajes_actuales, key=lambda m: (m.creado_en, m.id))
+
     mensajes_recientes = (
         db.query(Mensaje)
         .filter(
             Mensaje.conversacion_id == conversacion.id,
-            Mensaje.id != mensaje_actual.id,
+            ~Mensaje.id.in_(ids_actuales),
         )
         # El id desempata: dos mensajes guardados en el mismo instante (el
         # texto del modelo y el aviso de escalamiento salen uno detrás del
@@ -44,7 +58,7 @@ def construir_historial(db: Session, conversacion: Conversacion, mensaje_actual:
     ultimo_anterior = historial[-1]
 
     limite_antiguedad = timedelta(days=config.historial_dias_validez)
-    if mensaje_actual.creado_en - ultimo_anterior.creado_en > limite_antiguedad:
+    if primero_actual.creado_en - ultimo_anterior.creado_en > limite_antiguedad:
         return []
 
     return historial

@@ -86,6 +86,12 @@ class RespuestaGenerada:
     texto: str | None
     escalar: bool
     resumen: str | None
+    # Uso del modelo, para el dashboard de costos (ver
+    # specs/spec-dashboard-metricas.md). None cuando el proveedor no informa
+    # tokens — pasa siempre con ProveedorFijo, y puede pasar con un
+    # openai_compat que no devuelva "usage".
+    tokens_entrada: int | None = None
+    tokens_salida: int | None = None
 
 
 class ErrorTransitorioProveedor(Exception):

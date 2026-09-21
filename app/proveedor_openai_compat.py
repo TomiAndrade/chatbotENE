@@ -179,6 +179,17 @@ def _a_mensaje_openai(mensaje: Mensaje) -> dict:
     return {"role": rol_openai, "content": texto}
 
 
+def _tokens_de_uso(cuerpo: dict) -> tuple[int | None, int | None]:
+    """Tokens de entrada/salida del bloque "usage" del formato OpenAI, para
+    el dashboard de costos (specs/spec-dashboard-metricas.md). No todo
+    proveedor detrás de BASE_URL lo devuelve — sin "usage", queda None y el
+    dashboard lo muestra como N/D en vez de asumir cero."""
+    uso = cuerpo.get("usage")
+    if not isinstance(uso, dict):
+        return None, None
+    return uso.get("prompt_tokens"), uso.get("completion_tokens")
+
+
 def _interpretar_respuesta(cuerpo: dict) -> RespuestaGenerada:
     """Junta el texto y detecta si hay un tool call de escalar_a_humano.
     Si el tool call llegó pero function.arguments no parsea como JSON (o
@@ -226,4 +237,8 @@ def _interpretar_respuesta(cuerpo: dict) -> RespuestaGenerada:
             )
             resumen = None
 
-    return RespuestaGenerada(texto=texto, escalar=escalar, resumen=resumen)
+    tokens_entrada, tokens_salida = _tokens_de_uso(cuerpo)
+    return RespuestaGenerada(
+        texto=texto, escalar=escalar, resumen=resumen,
+        tokens_entrada=tokens_entrada, tokens_salida=tokens_salida,
+    )

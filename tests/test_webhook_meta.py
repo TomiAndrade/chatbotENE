@@ -8,7 +8,9 @@ propio: es correr `pytest` entero.
 
 import json
 
+from app import main as main_mod
 from app.db import SessionLocal
+from app.mensajes import MENSAJE_ADJUNTO_IMAGEN
 from app.models import Conversacion, Mensaje
 from tests.conftest import TELEFONO_DE_PRUEBA
 from tests.helpers import firmar_meta, mensaje_meta_texto, payload_meta_mensajes, payload_meta_statuses, payload_meta_texto
@@ -118,10 +120,19 @@ def test_dos_mensajes_en_el_mismo_entry_encolan_dos_tareas(client, meta_enviados
     assert len(guardados) == 2
 
 
-# --- 6: tipo no soportado guarda el placeholder y no rompe --------------------
+# --- 6: tipo no soportado guarda el placeholder, responde fijo y no rompe ----
+#
+# El detalle de qué tipo responde qué texto, y de que no se llame al modelo,
+# está en tests/test_adjuntos_no_soportados.py (ver
+# specs/spec-adjuntos-no-soportados.md). Este test se queda con lo mínimo que
+# ya cubría antes de esa entrega: el placeholder se sigue guardando (para
+# historial y diagnóstico) y el webhook no rompe.
 
 
-def test_tipo_no_soportado_guarda_placeholder_y_no_rompe(client, meta_enviados):
+def test_tipo_no_soportado_guarda_placeholder_responde_fijo_y_no_rompe(client, meta_enviados, monkeypatch):
+    llamadas_al_modelo = []
+    monkeypatch.setattr(main_mod, "generar_respuesta", lambda **kw: llamadas_al_modelo.append(kw))
+
     mensaje = {
         "from": TELEFONO_DE_PRUEBA,
         "id": "wamid.imagen1",
@@ -138,6 +149,8 @@ def test_tipo_no_soportado_guarda_placeholder_y_no_rompe(client, meta_enviados):
     guardado = db.query(Mensaje).filter_by(wa_message_id="wamid.imagen1").one()
     db.close()
     assert guardado.contenido == "[mensaje de tipo 'image' no soportado en esta etapa]"
+    assert llamadas_al_modelo == []
+    assert meta_enviados == [(TELEFONO_DE_PRUEBA, MENSAJE_ADJUNTO_IMAGEN)]
 
 
 # --- 7: el mismo wa_message_id entregado dos veces se procesa una sola vez --

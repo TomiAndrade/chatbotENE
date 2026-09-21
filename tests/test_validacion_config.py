@@ -16,6 +16,7 @@ from app.config import Config
 from app.validacion_config import (
     ConfigInvalida,
     crm_sobre_https,
+    minimo_seguro_agrupar_abandono_segundos,
     resumen_config,
     validar_config,
 )
@@ -48,6 +49,10 @@ def _config_valida(**overrides) -> Config:
         escalamiento_habilitado=False,
         crm_habilitado=False,
         crm_base_url="",
+        agrupar_ventana_segundos=2.0,
+        agrupar_espera_maxima_segundos=8.0,
+        agrupar_abandono_segundos=60.0,
+        tarifas_ia={},
     )
     return replace(base, **overrides)
 
@@ -302,6 +307,53 @@ def test_una_base_url_que_no_es_url_no_arranca():
 def test_crm_sobre_https_decide_el_flag_secure():
     assert crm_sobre_https(_config_con_crm()) is True
     assert crm_sobre_https(_config_con_crm(crm_base_url="http://localhost:8000", debug=True)) is False
+
+
+# --- Agrupamiento de mensajes (specs/spec-agrupamiento-mensajes.md) --------
+
+
+@pytest.mark.parametrize(
+    "campo,nombre_variable",
+    [
+        ("agrupar_ventana_segundos", "AGRUPAR_VENTANA_SEGUNDOS"),
+        ("agrupar_espera_maxima_segundos", "AGRUPAR_ESPERA_MAXIMA_SEGUNDOS"),
+        ("agrupar_abandono_segundos", "AGRUPAR_ABANDONO_SEGUNDOS"),
+    ],
+)
+@pytest.mark.parametrize("valor", [0, -1])
+def test_agrupar_valor_no_positivo_no_arranca(campo, nombre_variable, valor):
+    mensaje = _mensaje_error(_config_valida(**{campo: valor}))
+    assert nombre_variable in mensaje
+
+
+def test_agrupar_abandono_por_debajo_del_minimo_seguro_no_arranca():
+    """El abandono tiene que quedar por encima del peor caso legítimo (espera
+    máxima + presupuesto de la llamada al modelo + reintentos de envío a
+    Meta + margen) — si no, una generación que todavía está en curso de
+    verdad puede perder su reserva antes de terminar y otro proceso la
+    retoma encima de ella."""
+    minimo = minimo_seguro_agrupar_abandono_segundos(_config_valida())
+
+    mensaje = _mensaje_error(_config_valida(agrupar_abandono_segundos=minimo))
+    assert "AGRUPAR_ABANDONO_SEGUNDOS" in mensaje
+
+
+def test_agrupar_abandono_justo_por_encima_del_minimo_seguro_pasa():
+    minimo = minimo_seguro_agrupar_abandono_segundos(_config_valida())
+
+    validar_config(_config_valida(agrupar_abandono_segundos=minimo + 1))
+
+
+def test_agrupar_valores_por_default_de_la_spec_son_validos():
+    """Los defaults propuestos en specs/spec-agrupamiento-mensajes.md (2/8/60)
+    tienen que pasar la validación real, no solo la cuenta a mano del spec."""
+    validar_config(
+        _config_valida(
+            agrupar_ventana_segundos=2.0,
+            agrupar_espera_maxima_segundos=8.0,
+            agrupar_abandono_segundos=60.0,
+        )
+    )
 
 
 def test_el_resumen_dice_si_el_crm_esta_prendido():

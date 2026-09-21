@@ -529,6 +529,16 @@ Dos cosas que hay que tener presentes hasta que exista Alembic:
   ejemplo) o un motivo de pausa nuevo, y el síntoma va a ser un
   `InvalidTextRepresentation` en runtime, no un error al arrancar.
 
+**Primer caso real de lo de arriba: la entrega 1.2 (agrupamiento de
+mensajes, specs/spec-agrupamiento-mensajes.md) sumó columnas a
+`conversaciones` y `mensajes`.** `create_all` las crea solas en una base
+nueva (tests, un deploy desde cero), pero no en una base Postgres existente.
+Se resolvió con `scripts/migracion_agrupamiento.sql` (columnas nullable, sin
+default, `ADD COLUMN IF NOT EXISTS` + rollback documentado) en vez de
+Alembic, consistente con que Alembic sigue fuera de alcance — no se corrió
+contra ninguna base real. Es el patrón a seguir para el próximo cambio de
+esquema mientras no exista Alembic.
+
 ---
 
 ## 5.c. Pool de conexiones vs. threadpool de background tasks — antes del deploy
@@ -551,6 +561,14 @@ red—, así que el desbalance de abajo no se nota hasta Postgres.
   presupuesto de hasta 20s (`PRESUPUESTO_TOTAL_SEGUNDOS`, ver CLAUDE.md). Una
   conexión de Postgres queda retenida por un mensaje entero, no por una
   query.
+- **La entrega 1.2 (agrupamiento de mensajes) alarga esto todavía más.**
+  `agrupar_y_responder` mantiene la misma sesión abierta durante toda la
+  espera de agrupamiento además de la llamada al modelo — hasta
+  `AGRUPAR_ESPERA_MAXIMA_SEGUNDOS` (default 8s) de más por mensaje, sumados
+  a los 20s de arriba. No se optimiza en esta entrega (ver
+  specs/spec-agrupamiento-mensajes.md): es la misma clase de riesgo que ya
+  documentaba este punto, no uno nuevo, y la solución de fondo sigue siendo
+  la misma (medir con datos reales de Render antes de tocar `pool_size`).
 - **Consecuencia si esto revienta:** el `TimeoutError` cae en el
   `except Exception` de `procesar_mensaje_entrante` (`app/main.py:416`), que
   loguea y sigue — el webhook ya devolvió 200 y Meta no reintenta, así que el
@@ -695,8 +713,14 @@ Esto **no** es deuda: son decisiones tomadas. Están acá para que no se
 redescubran como si fueran olvidos.
 
 - Deploy.
-- Transcripción de audios (hoy un audio entra como
-  `[mensaje de tipo 'audio' no soportado en esta etapa]`).
+- Transcripción de audios. Sigue fuera de alcance, pero desde la entrega 1.1
+  de `specs/roadmap-bot-crm.md` (ver specs/spec-adjuntos-no-soportados.md,
+  2026-09-21) un audio (o cualquier adjunto no soportado) ya no llega al
+  modelo: el `type` real del webhook dispara una respuesta fija pidiendo la
+  consulta por escrito, sin escalar. El texto
+  `[mensaje de tipo 'audio' no soportado en esta etapa]` se sigue guardando
+  como `contenido` del mensaje entrante, solo para historial y diagnóstico —
+  ya no es lo que decide la respuesta.
 - Mensajes con botones, listas o plantillas.
 - Devolver una conversación de humano a bot automáticamente — `modo_humano` se
   desmarca a mano en la base.

@@ -28,6 +28,7 @@ ENDPOINTS_PRIVADOS = [
     ("GET", "/crm/api/conversaciones?filtro=pausadas"),
     ("GET", "/crm/api/conversaciones/1/mensajes"),
     ("GET", "/crm/api/motivos"),
+    ("GET", "/crm/api/metricas"),
     ("POST", "/crm/api/conversaciones/1/reactivar"),
     ("POST", "/crm/api/logout"),
 ]
@@ -53,6 +54,22 @@ def test_sin_sesion_el_panel_manda_al_login(cliente_crm):
 
     assert respuesta.status_code == 303
     assert respuesta.headers["location"] == "/crm/login"
+
+
+def test_sin_sesion_el_dashboard_de_metricas_manda_al_login(cliente_crm):
+    respuesta = cliente_crm.get("/crm/metricas", follow_redirects=False)
+
+    assert respuesta.status_code == 303
+    assert respuesta.headers["location"] == "/crm/login"
+
+
+def test_con_sesion_el_dashboard_de_metricas_se_sirve(cliente_crm, usuario_crm):
+    login_crm(cliente_crm, usuario_crm)
+
+    respuesta = cliente_crm.get("/crm/metricas")
+
+    assert respuesta.status_code == 200
+    assert "métricas" in respuesta.text.lower()
 
 
 def test_la_pantalla_de_entrar_se_puede_abrir_sin_sesion(cliente_crm):

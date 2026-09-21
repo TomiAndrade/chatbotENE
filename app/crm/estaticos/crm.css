@@ -638,3 +638,136 @@ button { font: inherit; }
   .cabecera { padding: 0 14px; gap: 12px; }
   .cabecera h1 { font-size: 15px; padding-left: 12px; }
 }
+
+/* ---------- Navegación de la cabecera (Conversaciones / Métricas) ---------- */
+
+.cabecera-nav {
+  display: flex;
+  gap: 4px;
+  margin-left: 12px;
+}
+.cabecera-nav a {
+  color: var(--texto-suave);
+  text-decoration: none;
+  font-size: 13.5px;
+  font-weight: 600;
+  padding: 6px 10px;
+  border-radius: var(--radio-chico);
+}
+.cabecera-nav a:hover { background: rgba(20, 34, 42, 0.06); color: var(--texto); }
+.cabecera-nav a[aria-current="page"] {
+  color: var(--texto);
+  background: var(--fondo);
+}
+
+@media (max-width: 860px) {
+  .cabecera-nav { margin-left: 4px; gap: 2px; }
+  .cabecera-nav a { font-size: 12.5px; padding: 5px 7px; }
+}
+
+/* ---------- Dashboard de métricas (specs/spec-dashboard-metricas.md) ---------- */
+
+.metricas {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 20px 24px 40px;
+}
+
+.filtro-rango {
+  display: flex;
+  align-items: flex-end;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+  padding: 14px 16px;
+  background: var(--papel);
+  border: 1px solid var(--borde);
+  border-radius: var(--radio);
+}
+
+.campo-rango {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--texto);
+}
+.campo-rango input {
+  font: inherit;
+  padding: 8px 10px;
+  border: 1px solid var(--borde-fuerte);
+  border-radius: var(--radio-chico);
+  color: var(--texto);
+}
+
+.rango-nota {
+  color: var(--texto-suave);
+  font-size: 12.5px;
+}
+
+.tarjetas {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.tarjeta-metrica {
+  background: var(--papel);
+  border: 1px solid var(--borde);
+  border-radius: var(--radio);
+  padding: 14px 16px;
+  box-shadow: var(--sombra);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.tarjeta-etiqueta {
+  color: var(--texto-suave);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.tarjeta-valor {
+  font-size: 24px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--texto);
+}
+
+.tabla-seccion {
+  background: var(--papel);
+  border: 1px solid var(--borde);
+  border-radius: var(--radio);
+  padding: 16px;
+  overflow-x: auto;
+}
+.tabla-seccion h2 {
+  font-size: 15px;
+  margin-bottom: 12px;
+}
+
+.tabla-proveedores {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+.tabla-proveedores th {
+  text-align: left;
+  color: var(--texto-suave);
+  font-weight: 600;
+  font-size: 12.5px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--borde);
+}
+.tabla-proveedores td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--borde);
+  font-variant-numeric: tabular-nums;
+}
+.tabla-proveedores tbody tr:last-child td { border-bottom: none; }
+
+@media (max-width: 860px) {
+  .metricas { padding: 14px 14px 32px; }
+  .filtro-rango { gap: 10px; }
+}

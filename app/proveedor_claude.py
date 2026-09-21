@@ -85,6 +85,28 @@ def _a_mensaje_anthropic(mensaje: Mensaje) -> dict:
     return {"role": rol_anthropic, "content": texto}
 
 
+def _tokens_de_uso(respuesta) -> tuple[int | None, int | None]:
+    """Tokens de entrada/salida del bloque `usage` de la respuesta, para el
+    dashboard de costos (specs/spec-dashboard-metricas.md).
+
+    Los tests mockean la respuesta con un objeto simple que puede no traer
+    `usage` (o traerlo sin los atributos de caché) — getattr con default
+    evita que el dashboard le pida a los dobles que simulen un SDK entero.
+    tokens_entrada suma el input fresco más el de caché (creación y
+    lectura): no se separan en columnas propias, ver el spec sobre esa
+    simplificación deliberada.
+    """
+    uso = getattr(respuesta, "usage", None)
+    if uso is None:
+        return None, None
+    entrada = getattr(uso, "input_tokens", None)
+    if entrada is not None:
+        entrada += getattr(uso, "cache_creation_input_tokens", None) or 0
+        entrada += getattr(uso, "cache_read_input_tokens", None) or 0
+    salida = getattr(uso, "output_tokens", None)
+    return entrada, salida
+
+
 def _interpretar_respuesta(respuesta) -> RespuestaGenerada:
     """Junta los bloques `text` en un solo string y detecta si hay un bloque
     `tool_use` de escalar_a_humano. Si hay texto y además se llamó a la
@@ -105,4 +127,8 @@ def _interpretar_respuesta(respuesta) -> RespuestaGenerada:
             escalar = True
             resumen = bloque.input.get("resumen")
 
-    return RespuestaGenerada(texto=texto, escalar=escalar, resumen=resumen)
+    tokens_entrada, tokens_salida = _tokens_de_uso(respuesta)
+    return RespuestaGenerada(
+        texto=texto, escalar=escalar, resumen=resumen,
+        tokens_entrada=tokens_entrada, tokens_salida=tokens_salida,
+    )

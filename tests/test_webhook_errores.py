@@ -97,7 +97,7 @@ def test_bug_dentro_de_la_background_task_no_se_pierde_en_silencio(monkeypatch, 
     identificador y el wa_message_id, y la función no tiene que explotar
     hacia quien la llamó (el background-task runner de Starlette)."""
 
-    def _responder_roto(db, conversacion, mensaje_usuario):
+    def _responder_roto(db, conversacion, mensajes_agrupados):
         raise RuntimeError("bug simulado dentro de responder()")
 
     monkeypatch.setattr(main_mod, "responder", _responder_roto)

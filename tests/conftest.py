@@ -36,6 +36,14 @@ os.environ["HISTORIAL_DIAS_VALIDEZ"] = "7"
 os.environ["LIMITE_MENSAJES_HORA"] = "30"
 os.environ["PAUSA_HUMANA_MINUTOS"] = "120"
 os.environ["ESCALAMIENTO_HABILITADO"] = "false"
+# Agrupamiento de mensajes consecutivos (ver specs/spec-agrupamiento-mensajes.md).
+# Chicos a propósito: la mayoría de los tests manda un mensaje de texto y
+# espera la respuesta, y con esto la espera de agrupamiento no se nota. Los
+# tests que necesitan controlar la ventana con precisión la pisan con
+# monkeypatch sobre `config`, no dependen de estos valores.
+os.environ["AGRUPAR_VENTANA_SEGUNDOS"] = "0.02"
+os.environ["AGRUPAR_ESPERA_MAXIMA_SEGUNDOS"] = "0.08"
+os.environ["AGRUPAR_ABANDONO_SEGUNDOS"] = "5"
 # CRM prendido en la suite: sin CRM_HABILITADO el router ni siquiera se
 # registra (app/main.py) y los tests del panel darían 404 por el motivo
 # equivocado. No hay ninguna credencial del panel acá — las cuentas viven en
@@ -73,6 +81,15 @@ def _base_limpia():
     yield
     db = SessionLocal()
     try:
+        # Las dos son hijas de Conversacion por FK (conversacion_id): tienen
+        # que borrarse antes que la tabla padre, si no una base con las
+        # constraints activas (Postgres real) fallaría; SQLite no las hace
+        # cumplir por default, pero el orden tiene que ser correcto igual.
+        # Sin borrar LlamadaIA acá, sus filas se acumulaban entre tests
+        # (nunca se limpiaban) y contaminaban los conteos/costos agregados
+        # de test_metricas.py y las búsquedas puntuales de
+        # test_llamada_ia.py (MultipleResultsFound).
+        db.query(models.LlamadaIA).delete()
         db.query(models.Mensaje).delete()
         db.query(models.Conversacion).delete()
         # También las del CRM: si una sesión sobreviviera al test, el

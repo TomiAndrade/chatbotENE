@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Métricas — ENE</title>
+  <link rel="icon" href="/crm/estaticos/logo-ene.png">
+  <link rel="stylesheet" href="/crm/estaticos/crm.css">
+</head>
+<body>
+  <header class="cabecera">
+    <img class="logo" src="/crm/estaticos/logo-ene.png" alt="ENE — Entender Neuquén es Emprender">
+    <h1>Métricas</h1>
+    <nav class="cabecera-nav">
+      <a href="/crm">Conversaciones</a>
+      <a href="/crm/metricas" aria-current="page">Métricas</a>
+    </nav>
+    <div class="cabecera-cuenta">
+      <span id="usuario-actual" class="usuario"></span>
+      <button id="salir" type="button" class="boton-plano">Salir</button>
+    </div>
+  </header>
+
+  <p id="error-global" class="barra-error" role="alert" hidden>
+    <span id="error-global-texto"></span>
+    <button id="reintentar" type="button" class="boton-plano">Reintentar</button>
+  </p>
+
+  <main class="metricas">
+    <form id="filtro-rango" class="filtro-rango">
+      <label class="campo-rango">
+        <span>Desde</span>
+        <input type="date" id="desde" name="desde">
+      </label>
+      <label class="campo-rango">
+        <span>Hasta</span>
+        <input type="date" id="hasta" name="hasta">
+      </label>
+      <button type="submit" class="boton-primario">Aplicar</button>
+      <span class="rango-nota">Sin rango, se muestran los últimos 7 días.</span>
+    </form>
+
+    <div id="cargando" class="estado-vacio">Cargando métricas…</div>
+
+    <div id="contenido" hidden>
+      <section aria-label="Conversaciones y mensajes" class="tarjetas">
+        <article class="tarjeta-metrica">
+          <span class="tarjeta-etiqueta">Conversaciones con actividad</span>
+          <span id="m-conversaciones-actividad" class="tarjeta-valor"></span>
+        </article>
+        <article class="tarjeta-metrica">
+          <span class="tarjeta-etiqueta">Conversaciones nuevas</span>
+          <span id="m-conversaciones-nuevas" class="tarjeta-valor"></span>
+        </article>
+        <article class="tarjeta-metrica">
+          <span class="tarjeta-etiqueta">Mensajes entrantes</span>
+          <span id="m-mensajes-entrantes" class="tarjeta-valor"></span>
+        </article>
+        <article class="tarjeta-metrica">
+          <span class="tarjeta-etiqueta">Mensajes del bot</span>
+          <span id="m-mensajes-bot" class="tarjeta-valor"></span>
+        </article>
+        <article class="tarjeta-metrica">
+          <span class="tarjeta-etiqueta">Mensajes de humanos</span>
+          <span id="m-mensajes-humano" class="tarjeta-valor"></span>
+        </article>
+        <article class="tarjeta-metrica">
+          <span class="tarjeta-etiqueta">Mensajes por conversación</span>
+          <span id="m-mensajes-por-conversacion" class="tarjeta-valor"></span>
+        </article>
+      </section>
+
+      <section aria-label="Estado actual" class="tarjetas">
+        <article class="tarjeta-metrica">
+          <span class="tarjeta-etiqueta">Conversaciones activas (ahora)</span>
+          <span id="m-activas" class="tarjeta-valor"></span>
+        </article>
+        <article class="tarjeta-metrica">
+          <span class="tarjeta-etiqueta">Pausadas o escaladas (ahora)</span>
+          <span id="m-pausadas" class="tarjeta-valor"></span>
+        </article>
+      </section>
+
+      <section aria-label="Modelo de IA" class="tarjetas">
+        <article class="tarjeta-metrica">
+          <span class="tarjeta-etiqueta">Llamadas al modelo</span>
+          <span id="m-llamadas" class="tarjeta-valor"></span>
+        </article>
+        <article class="tarjeta-metrica">
+          <span class="tarjeta-etiqueta">Errores</span>
+          <span id="m-errores" class="tarjeta-valor"></span>
+        </article>
+        <article class="tarjeta-metrica">
+          <span class="tarjeta-etiqueta">Escaladas</span>
+          <span id="m-escaladas" class="tarjeta-valor"></span>
+        </article>
+        <article class="tarjeta-metrica">
+          <span class="tarjeta-etiqueta">Tasa de escalamiento</span>
+          <span id="m-tasa-escalamiento" class="tarjeta-valor"></span>
+        </article>
+        <article class="tarjeta-metrica">
+          <span class="tarjeta-etiqueta">Tiempo medio de generación</span>
+          <span id="m-tiempo-medio" class="tarjeta-valor"></span>
+        </article>
+        <article class="tarjeta-metrica">
+          <span class="tarjeta-etiqueta">Costo estimado (IA)</span>
+          <span id="m-costo-total" class="tarjeta-valor"></span>
+        </article>
+      </section>
+
+      <section aria-label="Uso por proveedor y modelo" class="tabla-seccion">
+        <h2>Uso por proveedor y modelo</h2>
+        <table class="tabla-proveedores">
+          <thead>
+            <tr>
+              <th scope="col">Proveedor</th>
+              <th scope="col">Modelo</th>
+              <th scope="col">Llamadas</th>
+              <th scope="col">Tokens entrada</th>
+              <th scope="col">Tokens salida</th>
+              <th scope="col">Costo estimado</th>
+            </tr>
+          </thead>
+          <tbody id="tabla-proveedores-cuerpo"></tbody>
+        </table>
+      </section>
+    </div>
+  </main>
+
+  <script src="/crm/estaticos/metricas.js"></script>
+</body>
+</html>
