@@ -767,6 +767,30 @@ button { font: inherit; }
 }
 .tabla-proveedores tbody tr:last-child td { border-bottom: none; }
 
+/* Barra de progreso del consumo mensual de WhatsApp/Meta
+   (specs/spec-costo-whatsapp-meta.md). Relleno con el degradé de marca, no
+   con semáforo rojo/amarillo/verde a propósito: esta etapa todavía no define
+   umbrales de alerta (70/90/100%), así que el color no tiene que sugerir
+   "peligro" ni "ok" — solo cuánto se usó. */
+.barra-progreso {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--borde);
+  overflow: hidden;
+}
+.barra-progreso-relleno {
+  height: 100%;
+  width: 100%;
+  background: var(--degrade-ene);
+  border-radius: inherit;
+  /* Se anima con transform, no con width: animar una propiedad de layout
+     dispara reflow en cada frame. El ancho real queda siempre en 100% y lo
+     que cambia es la escala horizontal, con el origen a la izquierda para
+     que se achique/agrande desde el borde inicial de la barra. */
+  transform-origin: left;
+  transition: transform 0.2s ease;
+}
+
 @media (max-width: 860px) {
   .metricas { padding: 14px 14px 32px; }
   .filtro-rango { gap: 10px; }

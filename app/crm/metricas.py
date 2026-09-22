@@ -15,6 +15,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.config import config
+from app.costo_meta import consumo_mensual
 from app.crm.servicio import contar_pausadas
 from app.models import Conversacion, LlamadaIA, Mensaje, ResultadoLlamadaIA, RolMensaje
 
@@ -199,6 +200,12 @@ def resumen(db: Session, desde: datetime, hasta: datetime) -> dict:
     costo_total = sum(costos_disponibles) if costos_disponibles else None
     costo_incompleto = len(costos_disponibles) < len(costos)
 
+    # Mes calendario actual, no el rango desde/hasta del resto del dashboard
+    # (mismo criterio que "estado_actual" arriba): el consumo de WhatsApp/Meta
+    # se mide por mes de facturación, no por el recorte de fechas que se esté
+    # mirando en pantalla.
+    whatsapp_meta = consumo_mensual(db, ahora)
+
     return {
         "rango": {"desde": desde.isoformat(), "hasta": hasta.isoformat()},
         "conversaciones": {
@@ -226,4 +233,5 @@ def resumen(db: Session, desde: datetime, hasta: datetime) -> dict:
             "costo_estimado_incompleto": costo_incompleto,
         },
         "mensajes_por_conversacion": _div(mensajes[RolMensaje.USUARIO.value], conversaciones_con_actividad),
+        "whatsapp_meta": whatsapp_meta,
     }

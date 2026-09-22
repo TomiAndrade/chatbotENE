@@ -125,6 +125,39 @@
           <tbody id="tabla-proveedores-cuerpo"></tbody>
         </table>
       </section>
+
+      <section aria-label="WhatsApp / Meta" class="tabla-seccion">
+        <h2>WhatsApp / Meta</h2>
+        <p class="rango-nota">
+          Costo estimado. La conciliación exacta con Meta requiere estados de entrega y facturación.
+        </p>
+        <div class="tarjetas">
+          <article class="tarjeta-metrica">
+            <span class="tarjeta-etiqueta">Mensajes contabilizados este mes</span>
+            <span id="m-meta-mensajes" class="tarjeta-valor"></span>
+          </article>
+          <article class="tarjeta-metrica">
+            <span class="tarjeta-etiqueta">Costo estimado acumulado</span>
+            <span id="m-meta-costo" class="tarjeta-valor"></span>
+          </article>
+          <article class="tarjeta-metrica">
+            <span class="tarjeta-etiqueta">Presupuesto mensual</span>
+            <span id="m-meta-presupuesto" class="tarjeta-valor"></span>
+          </article>
+          <article class="tarjeta-metrica">
+            <span class="tarjeta-etiqueta">Porcentaje utilizado</span>
+            <span id="m-meta-porcentaje" class="tarjeta-valor"></span>
+          </article>
+          <article class="tarjeta-metrica">
+            <span class="tarjeta-etiqueta">Saldo estimado restante</span>
+            <span id="m-meta-saldo" class="tarjeta-valor"></span>
+          </article>
+        </div>
+        <div class="barra-progreso" role="progressbar" aria-label="Porcentaje del presupuesto mensual utilizado"
+             aria-valuemin="0" aria-valuemax="100" id="meta-barra">
+          <div class="barra-progreso-relleno" id="meta-barra-relleno"></div>
+        </div>
+      </section>
     </div>
   </main>
 
