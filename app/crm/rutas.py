@@ -15,13 +15,13 @@ ningún dato: hay que poder bajarlos justamente para poder loguearse.
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.config import config
-from app.crm import intentos, metricas, servicio, sesiones, usuarios
+from app.crm import exportar, intentos, metricas, servicio, sesiones, usuarios
 from app.crm.auth import (
     borrar_cookie_de_sesion,
     poner_cookie_de_sesion,
@@ -263,6 +263,42 @@ def mensajes_de_conversacion(
     conversacion = _conversacion_o_404(db, conversacion_id)
     pagina = servicio.mensajes_de(db, conversacion, limite=limite, antes_de=antes_de, desde=desde)
     return {"conversacion": servicio.detalle_conversacion(db, conversacion), **pagina}
+
+
+@router.get("/api/conversaciones/{conversacion_id}/exportar")
+def exportar_conversacion(
+    conversacion_id: int,
+    sesion=Depends(requiere_sesion),
+    db: Session = Depends(obtener_db),
+):
+    """Descarga el historial completo de la conversación en Markdown, para
+    analizarlo con una IA aparte. Trae SIEMPRE todos los mensajes
+    (`servicio.todos_los_mensajes`), nunca la página que esté viendo el
+    panel en ese momento.
+
+    GET y sin CSRF a propósito, igual que el resto de las lecturas del panel
+    (`/api/conversaciones`, `/api/conversaciones/{id}/mensajes`): no escribe
+    nada, así que no aplica la protección que sí exigen reactivar y salir
+    (ver `verificar_csrf` en app/crm/auth.py).
+    """
+    conversacion = _conversacion_o_404(db, conversacion_id)
+    mensajes = servicio.todos_los_mensajes(db, conversacion)
+    contenido = exportar.generar_markdown(conversacion, mensajes)
+
+    logger.info(
+        "CRM: %s exportó la conversación %s (%s mensajes)",
+        sesion.usuario.usuario, conversacion.id, len(mensajes),
+    )
+
+    respuesta = Response(
+        content=contenido.encode("utf-8"),
+        media_type="text/markdown; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{exportar.nombre_de_archivo(conversacion.id)}"',
+        },
+    )
+    sin_cache(respuesta)
+    return respuesta
 
 
 @router.post("/api/conversaciones/{conversacion_id}/reactivar")

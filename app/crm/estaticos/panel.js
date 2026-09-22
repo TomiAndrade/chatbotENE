@@ -41,6 +41,7 @@ const elementos = {
   contacto: document.getElementById("contacto"),
   contactoMeta: document.getElementById("contacto-meta"),
   estadoChip: document.getElementById("estado-chip"),
+  exportar: document.getElementById("exportar"),
   reactivar: document.getElementById("reactivar"),
   avisoPausa: document.getElementById("aviso-pausa"),
   avisoReactivado: document.getElementById("aviso-reactivado"),
@@ -447,6 +448,19 @@ async function traerMensajesNuevos() {
   }
 }
 
+/* ---------- Exportar ---------- */
+
+/* Descarga el historial completo (no solo lo que está pintado en pantalla,
+ * ver app/crm/servicio.py:todos_los_mensajes) como un .md. Una navegación
+ * normal alcanza: el servidor manda Content-Disposition: attachment, así que
+ * el navegador dispara la descarga sin salir del panel — no hace falta fetch
+ * ni armar un blob a mano. */
+function exportarConversacion() {
+  const id = estado.elegidaId;
+  if (id === null) return;
+  window.location.href = `/crm/api/conversaciones/${id}/exportar`;
+}
+
 /* ---------- Reactivar ---------- */
 
 async function reactivar() {
@@ -523,6 +537,7 @@ function conectarEventos() {
   });
 
   elementos.cargarAnteriores.addEventListener("click", cargarAnteriores);
+  elementos.exportar.addEventListener("click", exportarConversacion);
   elementos.reactivar.addEventListener("click", reactivar);
   elementos.volver.addEventListener("click", () => {
     elementos.layout.dataset.vista = "lista";

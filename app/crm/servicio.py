@@ -233,6 +233,20 @@ def mensajes_de(
     return {"mensajes": [_mensaje_a_dict(m) for m in pagina], "hay_anteriores": hay_anteriores}
 
 
+def todos_los_mensajes(db: Session, conversacion: Conversacion) -> list[Mensaje]:
+    """El historial completo de la conversación, sin paginar — para la
+    exportación a Markdown (a diferencia de `mensajes_de`, que trae una
+    página a la vez para el panel). Mismo orden que el resto del CRM: por
+    id, no por `creado_en` (ver el comentario de `mensajes_de` sobre dos
+    mensajes guardados en el mismo instante)."""
+    return (
+        db.query(Mensaje)
+        .filter(Mensaje.conversacion_id == conversacion.id)
+        .order_by(Mensaje.id.asc())
+        .all()
+    )
+
+
 def motivos_legibles() -> dict[str, str]:
     """Cómo se muestra cada `motivo_pausa` en el panel. Acá y no en el
     JavaScript para que un valor nuevo del enum se traduzca en un solo lado."""

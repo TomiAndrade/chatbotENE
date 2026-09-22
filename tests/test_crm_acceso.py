@@ -27,6 +27,7 @@ ENDPOINTS_PRIVADOS = [
     ("GET", "/crm/api/conversaciones"),
     ("GET", "/crm/api/conversaciones?filtro=pausadas"),
     ("GET", "/crm/api/conversaciones/1/mensajes"),
+    ("GET", "/crm/api/conversaciones/1/exportar"),
     ("GET", "/crm/api/motivos"),
     ("GET", "/crm/api/metricas"),
     ("POST", "/crm/api/conversaciones/1/reactivar"),
