@@ -94,6 +94,7 @@ def validar_config(config: Config) -> None:
 
     errores.extend(_errores_agrupamiento(config))
     errores.extend(_errores_crm(config))
+    errores.extend(_errores_costo_meta(config))
 
     if errores:
         detalle = "\n".join(f"- {error}" for error in errores)
@@ -154,6 +155,27 @@ def _errores_agrupamiento(config: Config) -> list[str]:
                 "Con un valor más bajo, una generación legítima que todavía está en curso puede "
                 "perder su reserva antes de terminar y otro proceso la retoma encima de ella."
             )
+
+    return errores
+
+
+def _errores_costo_meta(config: Config) -> list[str]:
+    """Control preventivo de gasto de WhatsApp/Meta (ver
+    specs/spec-costo-whatsapp-meta.md, etapa 1). Mismo criterio que
+    `_errores_agrupamiento`: valores en cero o negativos no tienen sentido de
+    negocio (una tarifa o un presupuesto en $0 no es "gratis", es una
+    configuración a medio cargar) y arrancar así dejaría el costo estimado y
+    el porcentaje de consumo mostrando cualquier cosa en el CRM."""
+    errores: list[str] = []
+
+    if config.meta_tarifa_service_ars <= 0:
+        errores.append(
+            f"META_TARIFA_SERVICE_ARS={config.meta_tarifa_service_ars!r} tiene que ser mayor a 0."
+        )
+    if config.meta_presupuesto_mensual_ars <= 0:
+        errores.append(
+            f"META_PRESUPUESTO_MENSUAL_ARS={config.meta_presupuesto_mensual_ars!r} tiene que ser mayor a 0."
+        )
 
     return errores
 

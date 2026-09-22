@@ -3,7 +3,7 @@
 import enum
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Column, DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Column, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from app.db import Base
@@ -154,3 +154,42 @@ class LlamadaIA(Base):
     escalo = Column(Boolean, default=False, nullable=False)
     tokens_entrada = Column(Integer, nullable=True)
     tokens_salida = Column(Integer, nullable=True)
+
+
+class EnvioWhatsapp(Base):
+    """Control preventivo de gasto de WhatsApp/Meta, etapa 1 (ver
+    specs/spec-costo-whatsapp-meta.md). Una fila por cada envío saliente que
+    la Cloud API de Meta aceptó — nunca por uno que falló ni por uno que el
+    bot solo intentó armar. Que la fila exista ya significa "Meta aceptó el
+    POST": no hace falta una columna de estado para eso (ver `contabilizar_envio`
+    en app/costo_meta.py).
+
+    `mensaje_id` es el `Mensaje` (rol bot) que `enviar_y_guardar` acaba de
+    crear con este mismo `wa_message_id` — mismo par que va a hacer falta para
+    correlacionar `sent -> delivered -> read` en una etapa futura, cuando se
+    procesen los `statuses[]` del webhook. `wa_message_id` es único acá (además
+    de en `mensajes.wa_message_id`) para no contabilizar dos veces la misma
+    respuesta de Meta si algún reintento la procesara más de una vez.
+
+    `categoria`, `tarifa_ars` y `costo_estimado_ars` quedan grabados en la
+    fila (no recalculados después a partir de la config vigente): si mañana
+    cambia META_TARIFA_SERVICE_ARS, el histórico tiene que seguir mostrando la
+    tarifa que estaba vigente cuando se mandó cada mensaje, no la de hoy.
+    Es una ESTIMACIÓN preventiva, no facturación exacta — el sistema todavía
+    no concilia contra la factura real de Meta ni persiste delivered/read/failed.
+    """
+
+    __tablename__ = "envios_whatsapp"
+
+    id = Column(Integer, primary_key=True)
+    conversacion_id = Column(Integer, ForeignKey("conversaciones.id"), nullable=False, index=True)
+    mensaje_id = Column(Integer, ForeignKey("mensajes.id"), nullable=False, unique=True)
+    # Sin index=True: `unique=True` sola ya alcanza para que Postgres arme el
+    # índice que hace cumplir la constraint, mismo criterio que mensaje_id
+    # arriba. No hace falta un segundo índice para las búsquedas por esta
+    # columna — el que crea la UNIQUE ya sirve para eso.
+    wa_message_id = Column(String, unique=True, nullable=False)
+    categoria = Column(String, nullable=False)
+    tarifa_ars = Column(Numeric(12, 4), nullable=False)
+    costo_estimado_ars = Column(Numeric(12, 4), nullable=False)
+    creado_en = Column(DateTime(timezone=True), default=ahora_utc, nullable=False, index=True)

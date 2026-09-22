@@ -68,12 +68,13 @@ from sqlalchemy.exc import IntegrityError
 
 from app import mensajes
 from app.config import config
+from app.costo_meta import contabilizar_envio
 from app.crm.auth import crm_habilitado
 from app.crm.rutas import router as crm_router
 from app.db import SessionLocal, crear_engine, init_db, obtener_engine
 from app.historial import construir_historial
 from app.limite import mensajes_ultima_hora
-from app.meta import MetaClient, verificar_challenge, verificar_firma_webhook
+from app.meta import MetaClient, extraer_wa_message_id, verificar_challenge, verificar_firma_webhook
 from app.models import CANAL_WHATSAPP, Conversacion, LlamadaIA, Mensaje, MotivoPausa, ResultadoLlamadaIA, RolMensaje
 from app.pausa import pausa_vigente
 from app.respuesta import ErrorTransitorioProveedor, generar_respuesta
@@ -296,6 +297,17 @@ def enviar_y_guardar(
 
     Devuelve True si el mensaje salió; False si se descartó por modo_humano o
     si Meta lo rechazó.
+
+    Condición exacta para "contabilizado" (control preventivo de gasto,
+    specs/spec-costo-whatsapp-meta.md): Meta tiene que haber aceptado el POST
+    (no haber tirado `httpx.HTTPError`, sea cual sea el motivo) **y** haber
+    devuelto un `wa_message_id` (`messages[0].id`). Si Meta rechaza el envío,
+    no se contabiliza nada — se corta antes, en el `except` de abajo. Todo lo
+    que sale de acá cuenta igual (respuesta del modelo, aviso de
+    escalamiento, de límite o de error): los cuatro pasan por el mismo
+    chequeo. Contabilizamos de forma preventiva a partir de esa aceptación:
+    es una ESTIMACIÓN de gasto, no evidencia de facturación efectiva — el
+    sistema no concilia todavía contra la factura real de Meta.
     """
     identificador_externo = conversacion.identificador_externo
 
@@ -313,7 +325,7 @@ def enviar_y_guardar(
     # vista en los WARNING que loguea el cliente de Meta.
     cronometro_envio = Cronometro()
     try:
-        meta_client.enviar_mensaje_texto(identificador_externo, texto)
+        respuesta_meta = meta_client.enviar_mensaje_texto(identificador_externo, texto)
     except Exception:
         logger.info(
             "TIEMPOS %s | envío a Meta (fallo): %.0f ms",
@@ -326,13 +338,34 @@ def enviar_y_guardar(
         enmascarar_identificador(identificador_externo), cronometro_envio.ms(),
     )
 
+    # El id real que asignó Meta (ver app.meta.extraer_wa_message_id). Sin él
+    # no hay con qué correlacionar sent -> delivered/read en una etapa futura
+    # ni con qué contabilizar el costo estimado — nunca se inventa ni se
+    # deriva del id interno de mensaje_bot.
+    wa_message_id = extraer_wa_message_id(respuesta_meta)
+    if not wa_message_id:
+        logger.warning(
+            "Meta aceptó el envío a %s pero la respuesta no trajo messages[0].id: "
+            "queda sin wa_message_id y sin contabilizar en el costo estimado",
+            enmascarar_identificador(identificador_externo),
+        )
+
     mensaje_bot = Mensaje(
         conversacion_id=conversacion.id,
         rol=RolMensaje.BOT,
         contenido=texto,
+        wa_message_id=wa_message_id,
     )
     db.add(mensaje_bot)
     conversacion.ultimo_mensaje_en = datetime.now(timezone.utc)
+
+    if wa_message_id:
+        # flush (no commit): hace falta el id de mensaje_bot para la FK de
+        # EnvioWhatsapp, pero las dos filas se comitean juntas más abajo — no
+        # puede quedar una sin la otra.
+        db.flush()
+        contabilizar_envio(db, conversacion, mensaje_bot)
+
     db.commit()
 
     logger.info("Mensaje enviado a %s: %s", enmascarar_identificador(identificador_externo), texto)

@@ -144,6 +144,41 @@ def verificar_firma_webhook(cuerpo_crudo: bytes, firma_recibida: str | None) -> 
     return hmac.compare_digest(firma_esperada, firma_recibida)
 
 
+def extraer_wa_message_id(respuesta: dict) -> str | None:
+    """El id real que Meta asigna al mensaje saliente, de `messages[0].id`
+    (ver AGENTS.md/CLAUDE.md, "Contrato con la Cloud API de Meta") — la misma
+    forma para un texto normal, un aviso de escalamiento o cualquier otro
+    envío por `enviar_mensaje_texto`.
+
+    None si la respuesta no trae esa forma exacta — nunca una excepción. El
+    contrato dice que un 2xx siempre la trae, pero esto no confía en el
+    contrato a ciegas: quien llama (`enviar_y_guardar` en app/main.py) usa
+    este id tanto para persistir `Mensaje.wa_message_id` como para
+    contabilizar el costo estimado (specs/spec-costo-whatsapp-meta.md) — sin
+    id no hay ninguna de las dos cosas, nunca se inventa ni se deriva de otro
+    campo. Cada paso valida el tipo antes de navegar al siguiente, así una
+    respuesta malformada (JSON con otra forma, `messages` que no es lista,
+    un elemento que no es dict, un `id` que no es string) da None en vez de
+    reventar con AttributeError/TypeError/IndexError.
+    """
+    if not isinstance(respuesta, dict):
+        return None
+
+    mensajes_enviados = respuesta.get("messages")
+    if not isinstance(mensajes_enviados, list) or not mensajes_enviados:
+        return None
+
+    primer_mensaje = mensajes_enviados[0]
+    if not isinstance(primer_mensaje, dict):
+        return None
+
+    wa_message_id = primer_mensaje.get("id")
+    if not isinstance(wa_message_id, str) or not wa_message_id:
+        return None
+
+    return wa_message_id
+
+
 def verificar_challenge(hub_mode: str | None, hub_verify_token: str | None) -> bool:
     """True si el GET de verificación de Meta trae el modo y el verify token
     esperados. El llamador es responsable de devolver `hub.challenge` como
