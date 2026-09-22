@@ -56,6 +56,7 @@ def _config_valida(**overrides) -> Config:
         tarifas_ia={},
         meta_tarifa_service_ars=Decimal("37.6798"),
         meta_presupuesto_mensual_ars=Decimal("37679.80"),
+        meta_tope_duro_habilitado=False,
     )
     return replace(base, **overrides)
 

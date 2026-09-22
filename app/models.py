@@ -2,6 +2,7 @@
 
 import enum
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from sqlalchemy import Boolean, Column, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
@@ -193,3 +194,41 @@ class EnvioWhatsapp(Base):
     tarifa_ars = Column(Numeric(12, 4), nullable=False)
     costo_estimado_ars = Column(Numeric(12, 4), nullable=False)
     creado_en = Column(DateTime(timezone=True), default=ahora_utc, nullable=False, index=True)
+
+
+class PresupuestoMetaMensual(Base):
+    """Control preventivo de gasto de WhatsApp/Meta, etapa 2.1 — bloqueo
+    duro mensual (ver specs/spec-tope-duro-meta.md). Una fila por mes
+    calendario (`mes`, formato `YYYY-MM` en TIMEZONE, ver
+    `app.costo_meta.mes_actual`), creada perezosamente al primer intento de
+    envío de ese mes (`app.costo_meta.asegurar_fila_mensual`).
+
+    `presupuesto_ars` queda congelado con el valor de
+    `META_PRESUPUESTO_MENSUAL_ARS` vigente al crear la fila — mismo criterio
+    que `EnvioWhatsapp.tarifa_ars`: un cambio de config a mitad de mes no
+    reescribe retroactivamente el tope de un mes ya empezado.
+
+    `costo_comprometido_ars` es la fuente de verdad para bloquear, no un
+    espejo de `SUM(EnvioWhatsapp.costo_estimado_ars)`. Se incrementa con una
+    única sentencia `UPDATE` atómica (`app.costo_meta.reservar_gasto`) ANTES
+    de llamar a Meta — check y reserva son la misma operación, para que dos
+    envíos concurrentes no puedan superar juntos el presupuesto. Si Meta
+    rechaza o falla el envío, la reserva se libera
+    (`app.costo_meta.liberar_reserva`). **Si Meta acepta el envío pero
+    después falla el guardado de `Mensaje`/`EnvioWhatsapp`, la reserva NO se
+    libera** — es intencional y conservador: el gasto ya ocurrió del lado de
+    Meta aunque no quede el detalle local, y liberarla dejaría que el tope
+    real se corra hacia arriba con cada falla de ese tipo. Consecuencia:
+    `costo_comprometido_ars` puede quedar por encima de
+    `SUM(EnvioWhatsapp.costo_estimado_ars)` del mismo mes — nunca por
+    debajo. Nunca se resetea ni se borra una fila: el histórico de meses
+    pasados queda intacto.
+    """
+
+    __tablename__ = "presupuesto_meta_mensual"
+
+    id = Column(Integer, primary_key=True)
+    mes = Column(String, unique=True, nullable=False)
+    presupuesto_ars = Column(Numeric(12, 4), nullable=False)
+    costo_comprometido_ars = Column(Numeric(12, 4), nullable=False, default=Decimal("0"))
+    creado_en = Column(DateTime(timezone=True), default=ahora_utc, nullable=False)

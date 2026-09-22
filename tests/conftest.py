@@ -92,8 +92,13 @@ def _base_limpia():
         # test_llamada_ia.py (MultipleResultsFound). Mismo motivo para
         # EnvioWhatsapp (FK a mensaje_id: tiene que borrarse antes que
         # Mensaje) — si no, contaminaría test_costo_whatsapp.py.
+        # PresupuestoMetaMensual no tiene FK a nada de esto (va por `mes`,
+        # no por conversación), pero igual se limpia entre tests para que
+        # las cuentas de test_tope_duro_meta.py no arrastren reservas de un
+        # test al siguiente.
         db.query(models.EnvioWhatsapp).delete()
         db.query(models.LlamadaIA).delete()
+        db.query(models.PresupuestoMetaMensual).delete()
         db.query(models.Mensaje).delete()
         db.query(models.Conversacion).delete()
         # También las del CRM: si una sesión sobreviviera al test, el

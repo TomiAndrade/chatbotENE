@@ -45,6 +45,7 @@ class Config:
     tarifas_ia: dict[str, dict[str, float]]
     meta_tarifa_service_ars: Decimal
     meta_presupuesto_mensual_ars: Decimal
+    meta_tope_duro_habilitado: bool
 
 
 def _cargar_tarifas_ia() -> dict[str, dict[str, float]]:
@@ -139,6 +140,14 @@ def _cargar_config() -> Config:
         # (app/validacion_config.py) es quien exige que sean > 0.
         meta_tarifa_service_ars=Decimal(os.getenv("META_TARIFA_SERVICE_ARS", "37.6798")),
         meta_presupuesto_mensual_ars=Decimal(os.getenv("META_PRESUPUESTO_MENSUAL_ARS", "37679.80")),
+        # Etapa 2.1 del control de gasto (specs/spec-tope-duro-meta.md):
+        # bloqueo duro mensual. Apagado por default — mismo criterio que
+        # ESCALAMIENTO_HABILITADO/CRM_HABILITADO: el mecanismo entero
+        # (tabla, reserva atómica, enviar_y_guardar) puede vivir en el
+        # código sin que nada cambie de comportamiento hasta que alguien
+        # prenda esto a propósito. Sin alertas 70/90% todavía — eso es una
+        # entrega aparte.
+        meta_tope_duro_habilitado=os.getenv("META_TOPE_DURO_HABILITADO", "false").lower() == "true",
     )
 
 

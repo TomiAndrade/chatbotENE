@@ -54,6 +54,7 @@ dormidos, no eliminados — POST /webhook ya no los llama, pero el código y sus
 tests siguen ahí por si más adelante Meta habilita Coexistence.
 """
 
+import enum
 import json
 import logging
 import threading
@@ -68,7 +69,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app import mensajes
 from app.config import config
-from app.costo_meta import contabilizar_envio
+from app.costo_meta import contabilizar_envio, liberar_reserva, mes_actual, reservar_gasto
 from app.crm.auth import crm_habilitado
 from app.crm.rutas import router as crm_router
 from app.db import SessionLocal, crear_engine, init_db, obtener_engine
@@ -278,12 +279,26 @@ def esta_en_modo_humano(db, conversacion: Conversacion) -> bool:
     return pausa_vigente(conversacion, datetime.now(timezone.utc))
 
 
+class ResultadoEnvio(str, enum.Enum):
+    """Qué pasó al llamar a `enviar_y_guardar()` (specs/spec-tope-duro-meta.md,
+    etapa 2.1). Antes la función devolvía `bool`, y un `False` no alcanzaba
+    para distinguir "la conversación ya está en modo humano" de "Meta
+    rechazó el envío" de "no se llegó a intentar, bloqueado por
+    presupuesto" — tres motivos con implicancias distintas para quien llama.
+    `EXITOSO` es el único caso en el que el mensaje salió de verdad."""
+
+    EXITOSO = "exitoso"
+    MODO_HUMANO = "modo_humano"
+    FALLO_META = "fallo_meta"
+    BLOQUEADO_PRESUPUESTO = "bloqueado_presupuesto"
+
+
 def enviar_y_guardar(
     db,
     conversacion: Conversacion,
     texto: str,
     aunque_este_en_modo_humano: bool = False,
-) -> bool:
+) -> ResultadoEnvio:
     """Envía un texto por la Cloud API de Meta y, si se pudo mandar, lo guarda como mensaje
     del bot. Se usa tanto para la respuesta del modelo como para los avisos
     de escalamiento, límite y error: todos son mensajes "del bot" a efectos
@@ -295,8 +310,11 @@ def enviar_y_guardar(
     prender modo_humano y por eso llega con
     `aunque_este_en_modo_humano=True`.
 
-    Devuelve True si el mensaje salió; False si se descartó por modo_humano o
-    si Meta lo rechazó.
+    Devuelve `ResultadoEnvio.EXITOSO` si el mensaje salió; `MODO_HUMANO` si
+    se descartó porque la conversación ya pasó a una persona; `FALLO_META`
+    si Meta rechazó o falló el envío; `BLOQUEADO_PRESUPUESTO` si
+    `META_TOPE_DURO_HABILITADO=true` y el mes ya no tiene presupuesto para
+    este envío — en ese caso ni siquiera se llega a llamar a Meta.
 
     Condición exacta para "contabilizado" (control preventivo de gasto,
     specs/spec-costo-whatsapp-meta.md): Meta tiene que haber aceptado el POST
@@ -308,6 +326,20 @@ def enviar_y_guardar(
     chequeo. Contabilizamos de forma preventiva a partir de esa aceptación:
     es una ESTIMACIÓN de gasto, no evidencia de facturación efectiva — el
     sistema no concilia todavía contra la factura real de Meta.
+
+    Tope duro mensual (specs/spec-tope-duro-meta.md, etapa 2.1): con
+    `META_TOPE_DURO_HABILITADO=false` (el default) esta función se comporta
+    exactamente igual que antes de esta entrega — no reserva nada, no
+    bloquea nada. Prendido, reserva la tarifa contra el presupuesto del mes
+    ANTES de llamar a Meta (`reservar_gasto`, una única sentencia `UPDATE`
+    atómica — nunca "sumar -> comprobar saldo -> enviar -> registrar", que
+    dejaría una ventana de carrera entre envíos concurrentes). Si la reserva
+    no entra, no se llama a Meta. Si Meta rechaza/falla el envío después de
+    haber reservado, la reserva se libera (`liberar_reserva`). Si Meta
+    acepta, la reserva queda — tanto si el guardado posterior de
+    `Mensaje`/`EnvioWhatsapp` sale bien como si sale mal: liberarla en ese
+    segundo caso dejaría que el tope real se corra hacia arriba cada vez que
+    pase (ver el docstring de `PresupuestoMetaMensual`).
     """
     identificador_externo = conversacion.identificador_externo
 
@@ -317,7 +349,20 @@ def enviar_y_guardar(
             "respuesta: no se envía nada para no escribir encima de la persona",
             enmascarar_identificador(identificador_externo),
         )
-        return False
+        return ResultadoEnvio.MODO_HUMANO
+
+    # Tope duro mensual (specs/spec-tope-duro-meta.md). Con el flag apagado
+    # `mes_reservado` queda None y nada de lo de abajo se toca: ni se
+    # reserva antes de llamar a Meta, ni se libera si Meta falla.
+    mes_reservado = None
+    if config.meta_tope_duro_habilitado:
+        mes_reservado = mes_actual(datetime.now(timezone.utc))
+        if not reservar_gasto(db, mes_reservado):
+            logger.warning(
+                "Envío a %s bloqueado por el tope mensual de presupuesto (mes=%s): no se llama a Meta",
+                enmascarar_identificador(identificador_externo), mes_reservado,
+            )
+            return ResultadoEnvio.BLOQUEADO_PRESUPUESTO
 
     # Mide la llamada entera, reintentos y esperas de backoff incluidos (ver
     # MAX_REINTENTOS en app/meta.py): es lo que espera el usuario del otro
@@ -332,7 +377,9 @@ def enviar_y_guardar(
             enmascarar_identificador(identificador_externo), cronometro_envio.ms(),
         )
         logger.exception("No se pudo enviar un mensaje a %s", enmascarar_identificador(identificador_externo))
-        return False
+        if mes_reservado is not None:
+            liberar_reserva(db, mes_reservado)
+        return ResultadoEnvio.FALLO_META
     logger.info(
         "TIEMPOS %s | envío a Meta: %.0f ms",
         enmascarar_identificador(identificador_externo), cronometro_envio.ms(),
@@ -366,10 +413,18 @@ def enviar_y_guardar(
         db.flush()
         contabilizar_envio(db, conversacion, mensaje_bot)
 
+    # Si esto falla (motivo de DB, no de Meta), la excepción se escapa sin
+    # capturar hacia el except general de responder()/agrupar_y_responder —
+    # mismo comportamiento que antes de esta entrega (ver
+    # specs/spec-costo-whatsapp-meta.md, "Flujo inspeccionado"). La reserva
+    # de más arriba, si la hubo, ya quedó comiteada en su propia
+    # transacción y no se toca acá, a propósito: es justamente el caso
+    # "Meta aceptó pero falló la persistencia" que el diseño del tope duro
+    # deja intencionalmente sin liberar (ver PresupuestoMetaMensual).
     db.commit()
 
     logger.info("Mensaje enviado a %s: %s", enmascarar_identificador(identificador_externo), texto)
-    return True
+    return ResultadoEnvio.EXITOSO
 
 
 def escalar_a_humano(db, conversacion: Conversacion, resumen: str | None) -> None:
@@ -427,12 +482,13 @@ def escalar_a_humano(db, conversacion: Conversacion, resumen: str | None) -> Non
 
     ahora_local = datetime.now(config.timezone)
     aviso = mensajes.mensaje_escalamiento(ahora_local)
-    if not enviar_y_guardar(db, conversacion, aviso, aunque_este_en_modo_humano=True):
+    resultado_aviso = enviar_y_guardar(db, conversacion, aviso, aunque_este_en_modo_humano=True)
+    if resultado_aviso != ResultadoEnvio.EXITOSO:
         logger.error(
             "La conversación con %s quedó escalada pero NO se pudo enviar el aviso de "
-            "escalamiento: la persona del equipo tiene que responder sin que el usuario "
+            "escalamiento (%s): la persona del equipo tiene que responder sin que el usuario "
             "sepa todavía que su consulta pasó a un humano.",
-            enmascarar_identificador(conversacion.identificador_externo),
+            enmascarar_identificador(conversacion.identificador_externo), resultado_aviso.value,
         )
 
 
