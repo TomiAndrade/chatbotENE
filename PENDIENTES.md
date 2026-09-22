@@ -564,7 +564,7 @@ red—, así que el desbalance de abajo no se nota hasta Postgres.
 - **La entrega 1.2 (agrupamiento de mensajes) alarga esto todavía más.**
   `agrupar_y_responder` mantiene la misma sesión abierta durante toda la
   espera de agrupamiento además de la llamada al modelo — hasta
-  `AGRUPAR_ESPERA_MAXIMA_SEGUNDOS` (default 8s) de más por mensaje, sumados
+  `AGRUPAR_ESPERA_MAXIMA_SEGUNDOS` (default 15s) de más por mensaje, sumados
   a los 20s de arriba. No se optimiza en esta entrega (ver
   specs/spec-agrupamiento-mensajes.md): es la misma clase de riesgo que ya
   documentaba este punto, no uno nuevo, y la solución de fondo sigue siendo

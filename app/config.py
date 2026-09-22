@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
@@ -42,6 +43,8 @@ class Config:
     agrupar_espera_maxima_segundos: float
     agrupar_abandono_segundos: float
     tarifas_ia: dict[str, dict[str, float]]
+    meta_tarifa_service_ars: Decimal
+    meta_presupuesto_mensual_ars: Decimal
 
 
 def _cargar_tarifas_ia() -> dict[str, dict[str, float]]:
@@ -118,14 +121,24 @@ def _cargar_config() -> Config:
         # specs/spec-agrupamiento-mensajes.md). Sin validación obligatoria en
         # validar_config(): son parámetros de comportamiento con default
         # razonable, no secretos.
-        agrupar_ventana_segundos=float(os.getenv("AGRUPAR_VENTANA_SEGUNDOS", "2")),
-        agrupar_espera_maxima_segundos=float(os.getenv("AGRUPAR_ESPERA_MAXIMA_SEGUNDOS", "8")),
+        agrupar_ventana_segundos=float(os.getenv("AGRUPAR_VENTANA_SEGUNDOS", "5")),
+        agrupar_espera_maxima_segundos=float(os.getenv("AGRUPAR_ESPERA_MAXIMA_SEGUNDOS", "15")),
         # Peor caso legítimo: AGRUPAR_ESPERA_MAXIMA_SEGUNDOS (esperando el
         # lote) + PRESUPUESTO_TOTAL_SEGUNDOS de app/respuesta.py (20s, la
         # llamada al modelo) + reintentos de envío de app/meta.py (~3s de
         # backoff). Con los defaults de acá (8+20+3=31s), 60s deja margen.
         agrupar_abandono_segundos=float(os.getenv("AGRUPAR_ABANDONO_SEGUNDOS", "60")),
         tarifas_ia=_cargar_tarifas_ia(),
+        # Control preventivo de gasto de WhatsApp/Meta (ver
+        # specs/spec-costo-whatsapp-meta.md). Decimal, no float: son montos en
+        # pesos que se suman fila por fila en app/costo_meta.py, y el error de
+        # redondeo de un float se nota al acumular miles de envíos. Sin
+        # try/except acá a propósito, mismo criterio que el resto de esta
+        # función: un valor no numérico corta el arranque enseguida, en vez de
+        # arrancar con una tarifa silenciosamente mal parseada. validar_config()
+        # (app/validacion_config.py) es quien exige que sean > 0.
+        meta_tarifa_service_ars=Decimal(os.getenv("META_TARIFA_SERVICE_ARS", "37.6798")),
+        meta_presupuesto_mensual_ars=Decimal(os.getenv("META_PRESUPUESTO_MENSUAL_ARS", "37679.80")),
     )
 
 

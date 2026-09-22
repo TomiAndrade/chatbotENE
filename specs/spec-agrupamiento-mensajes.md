@@ -166,9 +166,9 @@ una función sincronizada con `threading.Event`, sin depender de que el reloj
 real y el tiempo de ejecución del test coincidan (ver "Tests" más abajo).
 
 Este bucle es el que resuelve **"ventana breve, con espera máxima"**: cada
-vuelta duerme `AGRUPAR_VENTANA_SEGUNDOS` (propuesta inicial: 2s) y se corta
+vuelta duerme `AGRUPAR_VENTANA_SEGUNDOS` (propuesta inicial: 5s) y se corta
 sola si nadie escribió nada nuevo en esa vuelta (ráfaga terminada) o si ya
-se llegó a `AGRUPAR_ESPERA_MAXIMA_SEGUNDOS` (propuesta inicial: 8s) desde que
+se llegó a `AGRUPAR_ESPERA_MAXIMA_SEGUNDOS` (propuesta inicial: 15s) desde que
 arrancó a esperar (ráfaga continua, corta igual).
 
 **Consecuencia que hay que tener presente:** todo mensaje de texto, incluido
@@ -410,9 +410,9 @@ un revert del código, nunca solo.
 
 ## Configuración nueva
 
-- `AGRUPAR_VENTANA_SEGUNDOS` (float, default `2`): cuánto se espera en
+- `AGRUPAR_VENTANA_SEGUNDOS` (float, default `5`): cuánto se espera en
   silencio antes de dar por terminada una ráfaga.
-- `AGRUPAR_ESPERA_MAXIMA_SEGUNDOS` (float, default `8`): tope duro desde que
+- `AGRUPAR_ESPERA_MAXIMA_SEGUNDOS` (float, default `15`): tope duro desde que
   arranca la espera, sin importar que sigan llegando mensajes.
 - `AGRUPAR_ABANDONO_SEGUNDOS` (float, default `60`): a partir de cuándo una
   reserva se considera abandonada y se puede retomar.

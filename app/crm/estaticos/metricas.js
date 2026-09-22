@@ -61,6 +61,7 @@ function limpiarError() {
 const numeroEntero = new Intl.NumberFormat("es-AR");
 const numeroDecimal = new Intl.NumberFormat("es-AR", { maximumFractionDigits: 1 });
 const numeroMoneda = new Intl.NumberFormat("es-AR", { style: "currency", currency: "USD", maximumFractionDigits: 4 });
+const numeroMonedaArs = new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 2 });
 
 function entero(valor) {
   return valor === null || valor === undefined ? ND : numeroEntero.format(valor);
@@ -77,6 +78,10 @@ function duracion(ms) {
 
 function moneda(valor) {
   return valor === null || valor === undefined ? ND : numeroMoneda.format(valor);
+}
+
+function monedaArs(valor) {
+  return valor === null || valor === undefined ? ND : numeroMonedaArs.format(valor);
 }
 
 /* ---------- Pintado ---------- */
@@ -102,6 +107,26 @@ function pintarTarjetas(datos) {
   const costoTexto = moneda(datos.modelo.costo_estimado_usd_total);
   document.getElementById("m-costo-total").textContent =
     datos.modelo.costo_estimado_incompleto && costoTexto !== ND ? `${costoTexto} (parcial)` : costoTexto;
+}
+
+function pintarWhatsappMeta(datos) {
+  document.getElementById("m-meta-mensajes").textContent = entero(datos.mensajes_contabilizados);
+  document.getElementById("m-meta-costo").textContent = monedaArs(datos.costo_estimado_ars);
+  document.getElementById("m-meta-presupuesto").textContent = monedaArs(datos.presupuesto_mensual_ars);
+  document.getElementById("m-meta-porcentaje").textContent = porcentaje(datos.porcentaje_utilizado);
+  document.getElementById("m-meta-saldo").textContent = monedaArs(datos.saldo_estimado_restante_ars);
+
+  // Clampeado a [0, 100]: pasado el 100% del presupuesto la barra se ve
+  // llena, no se desborda ni corta el layout. Sin colores de alerta a
+  // propósito (ver crm.css) — esta etapa todavía no define esos umbrales.
+  // Se anima con scaleX (transform), no con width — ver el comentario de
+  // .barra-progreso-relleno en crm.css.
+  const porcentajeCien = datos.porcentaje_utilizado === null ? 0 : datos.porcentaje_utilizado * 100;
+  const anchoBarra = Math.max(0, Math.min(100, porcentajeCien));
+  const barra = document.getElementById("meta-barra");
+  const relleno = document.getElementById("meta-barra-relleno");
+  relleno.style.transform = `scaleX(${anchoBarra / 100})`;
+  barra.setAttribute("aria-valuenow", Math.round(anchoBarra));
 }
 
 function filaDeProveedor(fila) {
@@ -153,6 +178,7 @@ async function cargar() {
     const datos = await api(`/crm/api/metricas?${parametrosDeRango()}`);
     pintarTarjetas(datos);
     pintarTabla(datos.modelo.por_proveedor_modelo);
+    pintarWhatsappMeta(datos.whatsapp_meta);
     elementos.cargando.hidden = true;
     elementos.contenido.hidden = false;
     limpiarError();
