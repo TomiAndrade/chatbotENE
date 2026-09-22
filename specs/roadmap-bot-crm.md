@@ -148,8 +148,8 @@ Activar escalamiento y desplegar son pasos posteriores explícitos.
   todavía contra WhatsApp real.** Spec de la entrega:
   `specs/spec-agrupamiento-mensajes.md`. Los mensajes de texto consecutivos
   de una misma conversación se agrupan en una sola llamada al modelo:
-  ventana de espera breve (`AGRUPAR_VENTANA_SEGUNDOS`, default 2s) con tope
-  duro (`AGRUPAR_ESPERA_MAXIMA_SEGUNDOS`, default 8s), coordinado con una
+  ventana de espera breve (`AGRUPAR_VENTANA_SEGUNDOS`, default 5s) con tope
+  duro (`AGRUPAR_ESPERA_MAXIMA_SEGUNDOS`, default 15s), coordinado con una
   reserva atómica en la base (`UPDATE` condicional sobre columnas nuevas de
   `Conversacion`, no una cola en memoria — funciona igual con más de un
   proceso) y recuperación automática si el proceso que tenía la reserva se

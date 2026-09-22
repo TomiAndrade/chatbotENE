@@ -118,8 +118,8 @@ def _cargar_config() -> Config:
         # specs/spec-agrupamiento-mensajes.md). Sin validación obligatoria en
         # validar_config(): son parámetros de comportamiento con default
         # razonable, no secretos.
-        agrupar_ventana_segundos=float(os.getenv("AGRUPAR_VENTANA_SEGUNDOS", "2")),
-        agrupar_espera_maxima_segundos=float(os.getenv("AGRUPAR_ESPERA_MAXIMA_SEGUNDOS", "8")),
+        agrupar_ventana_segundos=float(os.getenv("AGRUPAR_VENTANA_SEGUNDOS", "5")),
+        agrupar_espera_maxima_segundos=float(os.getenv("AGRUPAR_ESPERA_MAXIMA_SEGUNDOS", "15")),
         # Peor caso legítimo: AGRUPAR_ESPERA_MAXIMA_SEGUNDOS (esperando el
         # lote) + PRESUPUESTO_TOTAL_SEGUNDOS de app/respuesta.py (20s, la
         # llamada al modelo) + reintentos de envío de app/meta.py (~3s de
