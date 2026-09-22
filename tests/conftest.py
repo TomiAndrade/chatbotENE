@@ -7,6 +7,7 @@ tests dependan de las claves reales del desarrollador o pisen su base de
 desarrollo.
 """
 
+import itertools
 import os
 import secrets
 import tempfile
@@ -88,7 +89,10 @@ def _base_limpia():
         # Sin borrar LlamadaIA acá, sus filas se acumulaban entre tests
         # (nunca se limpiaban) y contaminaban los conteos/costos agregados
         # de test_metricas.py y las búsquedas puntuales de
-        # test_llamada_ia.py (MultipleResultsFound).
+        # test_llamada_ia.py (MultipleResultsFound). Mismo motivo para
+        # EnvioWhatsapp (FK a mensaje_id: tiene que borrarse antes que
+        # Mensaje) — si no, contaminaría test_costo_whatsapp.py.
+        db.query(models.EnvioWhatsapp).delete()
         db.query(models.LlamadaIA).delete()
         db.query(models.Mensaje).delete()
         db.query(models.Conversacion).delete()
@@ -129,12 +133,21 @@ def db():
 @pytest.fixture
 def meta_enviados(monkeypatch):
     """Reemplaza el envío real por uno que solo registra qué se mandó. Los
-    tests no deben pegarle a la API real de Meta."""
+    tests no deben pegarle a la API real de Meta.
+
+    Cada llamada devuelve un `messages[0].id` distinto, como el real: desde
+    que `enviar_y_guardar` (app/main.py) persiste ese id en
+    `Mensaje.wa_message_id` (columna `unique=True`), un test que mande más de
+    un mensaje del bot con un id fijo repetido violaría esa constraint — no es
+    un detalle de implementación, un mismo wa_message_id dos veces sería un
+    bug real de Meta, nunca algo que el bot tenga que tolerar en un test.
+    """
     enviados = []
+    contador_ids = itertools.count(1)
 
     def envio_falso(telefono: str, texto: str) -> dict:
         enviados.append((telefono, texto))
-        return {"messages": [{"id": "wamid.falso"}]}
+        return {"messages": [{"id": f"wamid.falso.{next(contador_ids)}"}]}
 
     monkeypatch.setattr(meta_client, "enviar_mensaje_texto", envio_falso)
     return enviados

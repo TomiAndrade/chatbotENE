@@ -8,6 +8,7 @@ startup real no se puede disparar en esta suite).
 """
 
 from dataclasses import replace
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -53,6 +54,8 @@ def _config_valida(**overrides) -> Config:
         agrupar_espera_maxima_segundos=8.0,
         agrupar_abandono_segundos=60.0,
         tarifas_ia={},
+        meta_tarifa_service_ars=Decimal("37.6798"),
+        meta_presupuesto_mensual_ars=Decimal("37679.80"),
     )
     return replace(base, **overrides)
 
@@ -352,6 +355,33 @@ def test_agrupar_valores_por_default_de_la_spec_son_validos():
             agrupar_ventana_segundos=2.0,
             agrupar_espera_maxima_segundos=8.0,
             agrupar_abandono_segundos=60.0,
+        )
+    )
+
+
+# --- Control preventivo de gasto de WhatsApp/Meta (specs/spec-costo-whatsapp-meta.md) --
+
+
+@pytest.mark.parametrize(
+    "campo,nombre_variable",
+    [
+        ("meta_tarifa_service_ars", "META_TARIFA_SERVICE_ARS"),
+        ("meta_presupuesto_mensual_ars", "META_PRESUPUESTO_MENSUAL_ARS"),
+    ],
+)
+@pytest.mark.parametrize("valor", [Decimal("0"), Decimal("-1")])
+def test_costo_meta_valor_no_positivo_no_arranca(campo, nombre_variable, valor):
+    mensaje = _mensaje_error(_config_valida(**{campo: valor}))
+    assert nombre_variable in mensaje
+
+
+def test_costo_meta_valores_por_default_de_la_spec_son_validos():
+    """Los defaults del encargo (37.6798 / 37679.80) tienen que pasar la
+    validación real, no solo la cuenta a mano."""
+    validar_config(
+        _config_valida(
+            meta_tarifa_service_ars=Decimal("37.6798"),
+            meta_presupuesto_mensual_ars=Decimal("37679.80"),
         )
     )
 
