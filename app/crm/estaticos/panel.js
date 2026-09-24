@@ -278,7 +278,10 @@ function elementoDeMensaje(mensaje) {
   firma.className = "firma";
   const quien = document.createElement("span");
   quien.className = "quien";
-  quien.textContent = NOMBRE_DE_ROL[mensaje.rol] || mensaje.rol;
+  const nombreRol = NOMBRE_DE_ROL[mensaje.rol] || mensaje.rol;
+  quien.textContent = mensaje.rol === "humano" && mensaje.autor
+    ? `${nombreRol} — ${mensaje.autor}`
+    : nombreRol;
   const cuando = document.createElement("span");
   cuando.textContent = `${diaYMes(mensaje.creado_en)} ${hora(mensaje.creado_en)}`;
   firma.append(quien, cuando);
