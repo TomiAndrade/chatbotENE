@@ -539,6 +539,15 @@ Alembic, consistente con que Alembic sigue fuera de alcance — no se corrió
 contra ninguna base real. Es el patrón a seguir para el próximo cambio de
 esquema mientras no exista Alembic.
 
+**Segundo caso, y el primero con un enum: atenciones del CRM (Entrega 1,
+Tarea 1, `app/atencion.py`).** Suma el valor `atencion_crm` a `motivo_pausa`.
+**Antes de desplegar ese código, correr `scripts/migracion_atenciones.sql`
+contra la base de producción.** Sin el `ALTER TYPE`, "Iniciar atención"
+falla en runtime con `InvalidTextRepresentation` y el arranque no lo
+detecta. La tabla `atenciones` la crea `create_all` sola; el enum no. Ese
+valor no se puede quitar después (Postgres no tiene `DROP VALUE`), así que
+el DOWN del script es parcial. Ver el comentario del propio script.
+
 ---
 
 ## 5.c. Pool de conexiones vs. threadpool de background tasks — antes del deploy

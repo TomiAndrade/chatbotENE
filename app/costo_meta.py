@@ -7,7 +7,7 @@ real de Meta ni persiste los estados `sent`/`delivered`/`read`/`failed` de
 más sin darse cuenta — no para cuadrar centavos contra Meta Business Suite.
 
 Mismo patrón que app/limite.py y app/pausa.py: un módulo de dominio propio,
-sin nada de CRM, que tanto app/main.py (para contabilizar y, con
+sin nada de CRM, que tanto app/envio.py (para contabilizar y, con
 META_TOPE_DURO_HABILITADO=true, para reservar/liberar presupuesto) como
 app/crm/metricas.py (para mostrar el consumo en el panel) importan.
 """
@@ -45,24 +45,24 @@ def mes_actual(ahora: datetime) -> str:
     return ahora.astimezone(config.timezone).strftime("%Y-%m")
 
 
-def contabilizar_envio(db: Session, conversacion: Conversacion, mensaje_bot: Mensaje) -> EnvioWhatsapp | None:
+def contabilizar_envio(db: Session, conversacion: Conversacion, mensaje: Mensaje) -> EnvioWhatsapp | None:
     """Agrega (sin comitear) la fila de costo estimado para un envío que Meta
-    ya aceptó. La llama `enviar_y_guardar` (app/main.py) en la misma
-    transacción que crea `mensaje_bot`, después de un `db.flush()` que le da
+    ya aceptó. La llama `enviar_y_guardar` (app.envio) en la misma
+    transacción que crea `mensaje`, después de un `db.flush()` que le da
     id — así las dos filas se comitean juntas: no puede quedar un `Mensaje`
     sin su costo, ni un costo sin el mensaje que lo generó.
 
-    None si `mensaje_bot.wa_message_id` está vacío (nunca debería pasar si el
+    None si `mensaje.wa_message_id` está vacío (nunca debería pasar si el
     llamador ya comprobó que Meta devolvió un id) — no contabiliza nada sin
     "evidencia suficiente" del envío, misma condición que exige el spec.
     """
-    if not mensaje_bot.wa_message_id:
+    if not mensaje.wa_message_id:
         return None
 
     envio = EnvioWhatsapp(
         conversacion_id=conversacion.id,
-        mensaje_id=mensaje_bot.id,
-        wa_message_id=mensaje_bot.wa_message_id,
+        mensaje_id=mensaje.id,
+        wa_message_id=mensaje.wa_message_id,
         categoria=CATEGORIA_SERVICE,
         tarifa_ars=config.meta_tarifa_service_ars,
         # Costo por mensaje aceptado = la tarifa configurada, sin
@@ -122,7 +122,7 @@ def consumo_mensual(db: Session, ahora: datetime) -> dict:
 
 # --- Tope duro mensual, etapa 2.1 (specs/spec-tope-duro-meta.md) ----------
 #
-# Solo se ejercita con META_TOPE_DURO_HABILITADO=true (app/main.py,
+# Solo se ejercita con META_TOPE_DURO_HABILITADO=true (app/envio.py,
 # enviar_y_guardar). Con el flag apagado nada de acá abajo se llama.
 
 
@@ -189,7 +189,7 @@ def reservar_gasto(db: Session, mes: str) -> bool:
 
     Devuelve `True` si la reserva entró (`rowcount == 1`); `False` si
     hubiera superado el presupuesto (`rowcount == 0`) — en ese caso
-    `enviar_y_guardar` (app/main.py) no llama a Meta.
+    `enviar_y_guardar` (app.envio) no llama a Meta.
     """
     asegurar_fila_mensual(db, mes)
 

@@ -12,7 +12,7 @@ quién es la persona:
 - la cookie `crm_sesion`, que lleva **solo un identificador aleatorio** — el
   resto (de quién es, hasta cuándo vale, su token CSRF) está en Postgres, en
   `crm_sesiones` (ver `app/crm/sesiones.py`);
-- el token anti-CSRF para las acciones que escriben (reactivar y salir).
+- el token anti-CSRF para todas las acciones que escriben en el CRM.
 
 Nada de esto se cruza con el webhook: `POST /webhook` se sigue validando con
 la firma de Meta, no comparte cookie ni secreto con el panel, y la cookie de
@@ -77,7 +77,7 @@ def poner_cookie_de_sesion(respuesta: Response, token: str) -> None:
     navegaciones de arriba por GET —entrar al panel desde un link o un
     favorito— y **no** en un POST que nazca en otro sitio, que es lo que
     importa para CSRF. Todo lo que el panel lee por GET es de solo lectura;
-    las dos acciones que escriben son POST y además exigen el token de
+    las acciones que escriben son POST y además exigen el token de
     `verificar_csrf`.
 
     Con `Strict` la cookie tampoco viajaría al abrir el panel desde un link
@@ -139,7 +139,7 @@ def requiere_sesion(
 
 
 def verificar_csrf(request: Request, sesion) -> None:
-    """Para las acciones que escriben (reactivar y salir).
+    """Para todas las acciones que escriben en el CRM.
 
     La cookie es SameSite=Lax, así que el navegador no la manda en un POST
     que nazca en otro sitio; esto es la segunda barrera. El token

@@ -59,7 +59,8 @@ from app import models
 from app.config import config
 from app.crm import modelos as crm_modelos
 from app.db import SessionLocal, crear_engine, init_db
-from app.main import app, meta_client
+from app.envio import meta_client
+from app.main import app
 
 TELEFONO_DE_PRUEBA = "5492995551234"
 
@@ -96,6 +97,8 @@ def _base_limpia():
         # no por conversación), pero igual se limpia entre tests para que
         # las cuentas de test_tope_duro_meta.py no arrastren reservas de un
         # test al siguiente.
+        # Atencion apunta a conversaciones y a crm_usuarios: va primera.
+        db.query(models.Atencion).delete()
         db.query(models.EnvioWhatsapp).delete()
         db.query(models.LlamadaIA).delete()
         db.query(models.PresupuestoMetaMensual).delete()
@@ -141,7 +144,7 @@ def meta_enviados(monkeypatch):
     tests no deben pegarle a la API real de Meta.
 
     Cada llamada devuelve un `messages[0].id` distinto, como el real: desde
-    que `enviar_y_guardar` (app/main.py) persiste ese id en
+    que `enviar_y_guardar` (app.envio) persiste ese id en
     `Mensaje.wa_message_id` (columna `unique=True`), un test que mande más de
     un mensaje del bot con un id fijo repetido violaría esa constraint — no es
     un detalle de implementación, un mismo wa_message_id dos veces sería un

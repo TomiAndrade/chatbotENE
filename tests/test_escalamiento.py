@@ -11,6 +11,7 @@ cualquier cosa.
 import json
 from datetime import datetime, timezone
 
+from app import envio as envio_mod
 from app import main as main_mod
 from app.db import SessionLocal
 from app.mensajes import (
@@ -166,7 +167,7 @@ def test_si_falla_el_envio_del_aviso_el_escalamiento_queda_igual(escalamiento_ac
     def meta_caido(telefono, texto):
         raise RuntimeError("Meta no responde")
 
-    monkeypatch.setattr(main_mod.meta_client, "enviar_mensaje_texto", meta_caido)
+    monkeypatch.setattr(envio_mod.meta_client, "enviar_mensaje_texto", meta_caido)
 
     with caplog.at_level("WARNING", logger="bot"):
         _post_mensaje(client, "wamid.meta-caido", "tengo un reclamo")

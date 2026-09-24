@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.db import SessionLocal, crear_engine
 from app.models import CANAL_WHATSAPP, Conversacion
+from app.atencion import resolver_si_hay_abierta
 from app.pausa import reactivar_bot
 
 
@@ -25,7 +26,12 @@ def resetear_modo_humano(identificador_externo: str, canal: str = CANAL_WHATSAPP
 
     Los campos que se limpian los define `reactivar_bot` (app/pausa.py), que
     es lo mismo que usa el botón "Reactivar bot" del CRM: el script y el
-    panel tienen que dejar la conversación en el mismo estado.
+    panel tienen que dejar la conversación en el mismo estado. Por la misma
+    razón, si había una atención abierta, `resolver_si_hay_abierta` también
+    avanza la marca de agrupado hasta el último mensaje entrante (ver
+    `app.agrupamiento.avanzar_hasta_el_ultimo_entrante`): los mensajes que
+    llegaron durante esa atención le pertenecen a ella, no vuelven al bot
+    aunque quien la cierre sea la consola y no el panel.
     """
     db = SessionLocal()
     try:
@@ -35,6 +41,9 @@ def resetear_modo_humano(identificador_externo: str, canal: str = CANAL_WHATSAPP
         if conversacion is None:
             return False
 
+        # Una atención abierta con el bot ya activo mentiría en el panel: se
+        # cierra en el mismo commit, sin autor (no la resolvió nadie del CRM).
+        resolver_si_hay_abierta(db, conversacion, usuario_id=None)
         reactivar_bot(conversacion)
         db.commit()
         return True

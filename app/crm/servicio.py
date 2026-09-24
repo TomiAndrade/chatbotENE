@@ -11,7 +11,9 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
-from app.models import Conversacion, Mensaje, MotivoPausa
+from app.atencion import atencion_abierta
+from app.crm.modelos import UsuarioCrm
+from app.models import Atencion, Conversacion, Mensaje, MotivoPausa
 from app.pausa import pausa_vigente
 
 
@@ -173,6 +175,10 @@ def buscar_conversacion(db: Session, conversacion_id: int) -> Conversacion | Non
 
 
 def detalle_conversacion(db: Session, conversacion: Conversacion) -> dict:
+    """El resumen de la conversación más su atención abierta, si tiene.
+
+    La atención va solo en el detalle y no en la lista: sumarla a la lista
+    es trabajo del Kanban, que va a necesitar traerlas todas juntas."""
     ahora = datetime.now(timezone.utc)
     ultimo = (
         db.query(Mensaje)
@@ -180,13 +186,61 @@ def detalle_conversacion(db: Session, conversacion: Conversacion) -> dict:
         .order_by(Mensaje.id.desc())
         .first()
     )
-    return _resumen(conversacion, ultimo, ahora)
+    abierta = atencion_abierta(db, conversacion.id)
+    return {
+        **_resumen(conversacion, ultimo, ahora),
+        "atencion": atencion_a_dict(db, abierta) if abierta is not None else None,
+    }
 
 
-def _mensaje_a_dict(mensaje: Mensaje) -> dict:
+def _nombre_de_usuario(db: Session, usuario_id: int | None) -> str | None:
+    if usuario_id is None:
+        return None
+    usuario = db.query(UsuarioCrm).filter(UsuarioCrm.id == usuario_id).first()
+    return usuario.usuario if usuario is not None else None
+
+
+def atencion_a_dict(db: Session, atencion: Atencion) -> dict:
+    """Una atención tal como la ve el panel. Las personas van por nombre de
+    usuario, no por id. `iniciada_por` en None quiere decir que la abrió el
+    bot al derivar."""
+    return {
+        "id": atencion.id,
+        "conversacion_id": atencion.conversacion_id,
+        "estado": atencion.estado,
+        "motivo": atencion.motivo,
+        "resumen": atencion.resumen,
+        "iniciada_por": _nombre_de_usuario(db, atencion.iniciada_por_id),
+        "responsable": _nombre_de_usuario(db, atencion.responsable_id),
+        "resuelta_por": _nombre_de_usuario(db, atencion.resuelta_por_id),
+        "creada_en": _iso(atencion.creada_en),
+        "tomada_en": _iso(atencion.tomada_en),
+        "resuelta_en": _iso(atencion.resuelta_en),
+    }
+
+
+def nombres_de_autores(db: Session, mensajes: list[Mensaje]) -> dict[int, str]:
+    """Nombres de las cuentas autoras, en una sola consulta por página."""
+    ids = {mensaje.autor_crm_id for mensaje in mensajes if mensaje.autor_crm_id is not None}
+    if not ids:
+        return {}
+    usuarios = db.query(UsuarioCrm).filter(UsuarioCrm.id.in_(ids)).all()
+    return {usuario.id: usuario.usuario for usuario in usuarios}
+
+
+def mensaje_a_dict(
+    db: Session,
+    mensaje: Mensaje,
+    autores: dict[int, str] | None = None,
+) -> dict:
+    if autores is None:
+        autores = nombres_de_autores(db, [mensaje])
     return {
         "id": mensaje.id,
         "rol": mensaje.rol.value,
+        # None para BOT/USUARIO y para mensajes humanos históricos que no
+        # nacieron de una cuenta identificable del CRM.
+        "autor": autores.get(mensaje.autor_crm_id),
         # Texto plano, tal cual está en la base. El frontend lo pinta con
         # textContent, nunca con innerHTML: lo que escribió el usuario es
         # contenido, no HTML.
@@ -221,7 +275,8 @@ def mensajes_de(
 
     if desde is not None:
         mensajes = consulta.filter(Mensaje.id > desde).order_by(Mensaje.id.asc()).limit(MAX_MENSAJES_NUEVOS).all()
-        return {"mensajes": [_mensaje_a_dict(m) for m in mensajes], "hay_anteriores": False}
+        autores = nombres_de_autores(db, mensajes)
+        return {"mensajes": [mensaje_a_dict(db, m, autores) for m in mensajes], "hay_anteriores": False}
 
     if antes_de is not None:
         consulta = consulta.filter(Mensaje.id < antes_de)
@@ -230,7 +285,8 @@ def mensajes_de(
     recientes = consulta.order_by(Mensaje.id.desc()).limit(limite + 1).all()
     hay_anteriores = len(recientes) > limite
     pagina = list(reversed(recientes[:limite]))
-    return {"mensajes": [_mensaje_a_dict(m) for m in pagina], "hay_anteriores": hay_anteriores}
+    autores = nombres_de_autores(db, pagina)
+    return {"mensajes": [mensaje_a_dict(db, m, autores) for m in pagina], "hay_anteriores": hay_anteriores}
 
 
 def todos_los_mensajes(db: Session, conversacion: Conversacion) -> list[Mensaje]:
@@ -253,4 +309,5 @@ def motivos_legibles() -> dict[str, str]:
     return {
         MotivoPausa.ESCALAMIENTO.value: "El bot derivó la conversación a una persona",
         MotivoPausa.INTERVENCION_MANUAL.value: "Alguien del equipo respondió desde WhatsApp",
+        MotivoPausa.ATENCION_CRM.value: "Alguien del equipo inició una atención desde el panel",
     }

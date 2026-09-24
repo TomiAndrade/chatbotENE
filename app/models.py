@@ -4,12 +4,32 @@ import enum
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import Boolean, Column, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import relationship
 
 from app.db import Base
 
 CANAL_WHATSAPP = "whatsapp"
+
+# El único `messages[].type` de la Cloud API de Meta que hoy se trata como
+# soportado (ver specs/spec-adjuntos-no-soportados.md) y el único que entra
+# al agrupamiento (ver app/agrupamiento.py). Vive acá, junto a CANAL_WHATSAPP,
+# porque los dos son valores de columna que necesita más de un módulo que no
+# se puede importar entre sí (app/main.py y app/agrupamiento.py).
+TIPO_TEXTO = "text"
 
 
 def ahora_utc() -> datetime:
@@ -24,17 +44,26 @@ class RolMensaje(str, enum.Enum):
 
 class MotivoPausa(str, enum.Enum):
     """Por qué está prendido modo_humano. La distinción existe porque solo
-    una de las dos expira sola (ver `app.pausa.pausa_vigente`):
+    INTERVENCION_MANUAL expira sola (ver `app.pausa.pausa_vigente`):
 
     - ESCALAMIENTO: el modelo decidió que hacía falta una persona. No expira,
-      se desmarca a mano (`scripts/resetear_modo_humano.py`).
+      se desmarca a mano (`scripts/resetear_modo_humano.py`) o resolviendo
+      la atención desde el CRM.
     - INTERVENCION_MANUAL: la secretaría respondió desde la app de WhatsApp
       Business. Expira sola a los PAUSA_HUMANA_MINUTOS de la última vez que
       respondió (ver `modo_humano_desde` en `Conversacion`).
+    - ATENCION_CRM: alguien del equipo inició una atención desde el CRM (ver
+      `Atencion` y app/atencion.py). No expira: dura lo que dure la
+      atención y se levanta al resolverla.
+
+    Es un tipo nativo de Postgres: agregar un valor acá exige un
+    `ALTER TYPE motivo_pausa ADD VALUE` a mano en una base que ya existe
+    (ver scripts/migracion_atenciones.sql).
     """
 
     ESCALAMIENTO = "escalamiento"
     INTERVENCION_MANUAL = "intervencion_manual"
+    ATENCION_CRM = "atencion_crm"
 
 
 class Conversacion(Base):
@@ -98,6 +127,17 @@ class Mensaje(Base):
     )
     contenido = Column(Text, nullable=False)
     wa_message_id = Column(String, unique=True, nullable=True, index=True)
+    # Cuenta del CRM que escribió el mensaje, únicamente para respuestas
+    # humanas enviadas desde el panel. Es nullable porque BOT/USUARIO no
+    # tienen autor CRM y porque existen mensajes humanos históricos o
+    # provenientes del flujo dormido de WhatsApp Business sin una cuenta
+    # identificable. Las cuentas se desactivan en vez de borrarse, así que
+    # la autoría histórica permanece válida.
+    autor_crm_id = Column(
+        Integer,
+        ForeignKey("crm_usuarios.id", name="fk_mensajes_autor_crm_id"),
+        nullable=True,
+    )
     creado_en = Column(DateTime(timezone=True), default=ahora_utc, nullable=False)
     # El `messages[].type` real del webhook de Meta (ver
     # specs/spec-adjuntos-no-soportados.md), solo para rol=usuario. Decide si
@@ -165,8 +205,9 @@ class EnvioWhatsapp(Base):
     POST": no hace falta una columna de estado para eso (ver `contabilizar_envio`
     en app/costo_meta.py).
 
-    `mensaje_id` es el `Mensaje` (rol bot) que `enviar_y_guardar` acaba de
-    crear con este mismo `wa_message_id` — mismo par que va a hacer falta para
+    `mensaje_id` es el `Mensaje` saliente (bot o humano) que el camino
+    centralizado de `app.envio` acaba de crear con este mismo
+    `wa_message_id` — mismo par que va a hacer falta para
     correlacionar `sent -> delivered -> read` en una etapa futura, cuando se
     procesen los `statuses[]` del webhook. `wa_message_id` es único acá (además
     de en `mensajes.wa_message_id`) para no contabilizar dos veces la misma
@@ -232,3 +273,78 @@ class PresupuestoMetaMensual(Base):
     presupuesto_ars = Column(Numeric(12, 4), nullable=False)
     costo_comprometido_ars = Column(Numeric(12, 4), nullable=False, default=Decimal("0"))
     creado_en = Column(DateTime(timezone=True), default=ahora_utc, nullable=False)
+
+
+class EstadoAtencion(str, enum.Enum):
+    """En qué punto está una atención humana (ver `Atencion`)."""
+
+    PENDIENTE = "pendiente"
+    EN_ATENCION = "en_atencion"
+    RESUELTA = "resuelta"
+
+
+class MotivoAtencion(str, enum.Enum):
+    """Por qué hace falta una persona. Arranca con dos valores a propósito:
+    el catálogo completo (Evento, Reserva, etc.) todavía no está definido."""
+
+    ESCALAMIENTO = "escalamiento"
+    SIN_CLASIFICAR = "sin_clasificar"
+
+
+class Atencion(Base):
+    """Un episodio de atención humana sobre una conversación: nace cuando el
+    bot deriva o cuando alguien del equipo la inicia desde el CRM, y termina
+    al resolverla. Ver app/atencion.py, que es el único que la escribe.
+
+    Vive aparte de `Conversacion` por dos motivos:
+
+    - `reactivar_bot` limpia `resumen_escalamiento` y `escalada_en` de la
+      conversación. Acá el motivo y el resumen quedan guardados después de
+      resolver, uno por episodio.
+    - Es una tabla nueva: `create_all` la crea sola en una base existente,
+      sin `ALTER TABLE` sobre `conversaciones`.
+
+    `estado` y `motivo` son String y no Enum a propósito: un Enum de
+    SQLAlchemy es un tipo nativo de Postgres, y cada valor nuevo exigiría un
+    `ALTER TYPE` a mano (ver PENDIENTES.md). El catálogo de motivos va a
+    crecer, así que el control de valores válidos queda en Python
+    (`EstadoAtencion`, `MotivoAtencion`).
+
+    **Una sola atención abierta por conversación**, garantizado por la base
+    con un índice único parcial (solo cubre las filas no resueltas). Dos
+    personas que inician a la vez sobre la misma conversación no pueden
+    crear dos: la segunda choca con el índice.
+
+    `iniciada_por_id` en NULL quiere decir que la abrió el bot al derivar.
+    """
+
+    __tablename__ = "atenciones"
+    __table_args__ = (
+        Index(
+            "uq_atenciones_una_abierta_por_conversacion",
+            "conversacion_id",
+            unique=True,
+            postgresql_where=text("estado <> 'resuelta'"),
+            sqlite_where=text("estado <> 'resuelta'"),
+        ),
+    )
+
+    id = Column(Integer, primary_key=True)
+    conversacion_id = Column(Integer, ForeignKey("conversaciones.id"), nullable=False, index=True)
+    estado = Column(String, nullable=False, default=EstadoAtencion.PENDIENTE.value)
+    motivo = Column(String, nullable=False, default=MotivoAtencion.SIN_CLASIFICAR.value)
+    resumen = Column(Text, nullable=True)
+    # Las tres columnas de personas apuntan a `crm_usuarios` (app/crm/modelos.py).
+    # Las cuentas se desactivan en vez de borrarse, así que el rastro no se rompe.
+    iniciada_por_id = Column(Integer, ForeignKey("crm_usuarios.id"), nullable=True)
+    responsable_id = Column(Integer, ForeignKey("crm_usuarios.id"), nullable=True)
+    resuelta_por_id = Column(Integer, ForeignKey("crm_usuarios.id"), nullable=True)
+    creada_en = Column(DateTime(timezone=True), default=ahora_utc, nullable=False)
+    tomada_en = Column(DateTime(timezone=True), nullable=True)
+    resuelta_en = Column(DateTime(timezone=True), nullable=True)
+
+    # Sin relationship() hacia UsuarioCrm, a propósito: resolverla exige que
+    # app/crm/modelos.py esté importado, y hay scripts que usan app.models
+    # sin el CRM (scripts/resetear_modo_humano.py). Los nombres los busca
+    # app/crm/servicio.py a partir de los ids.
+    conversacion = relationship("Conversacion")

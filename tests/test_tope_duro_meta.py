@@ -16,7 +16,7 @@ import threading
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from app import main as main_mod
+from app import envio as envio_mod
 from app.config import config
 from app.costo_meta import asegurar_fila_mensual, liberar_reserva, mes_actual, reservar_gasto
 from app.db import SessionLocal
@@ -158,7 +158,7 @@ def test_meta_rechaza_el_envio_libera_la_reserva(client, meta_enviados, db, monk
     def meta_caido(telefono: str, texto: str) -> dict:
         raise RuntimeError("Meta no responde")
 
-    monkeypatch.setattr(main_mod.meta_client, "enviar_mensaje_texto", meta_caido)
+    monkeypatch.setattr(envio_mod.meta_client, "enviar_mensaje_texto", meta_caido)
 
     _post_mensaje(client, "wamid.meta-caido-tope", "hola")
 
@@ -216,7 +216,7 @@ def test_meta_acepta_pero_falla_persistencia_local_la_reserva_permanece(client, 
     def meta_acepta_id_colisionado(telefono: str, texto: str) -> dict:
         return {"messages": [{"id": "wamid.colision-persistencia"}]}
 
-    monkeypatch.setattr(main_mod.meta_client, "enviar_mensaje_texto", meta_acepta_id_colisionado)
+    monkeypatch.setattr(envio_mod.meta_client, "enviar_mensaje_texto", meta_acepta_id_colisionado)
 
     with caplog.at_level("ERROR"):
         _post_mensaje(client, "wamid.entrante-colision-persistencia", "hola")

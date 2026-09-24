@@ -152,7 +152,7 @@ def extraer_wa_message_id(respuesta: dict) -> str | None:
 
     None si la respuesta no trae esa forma exacta — nunca una excepción. El
     contrato dice que un 2xx siempre la trae, pero esto no confía en el
-    contrato a ciegas: quien llama (`enviar_y_guardar` en app/main.py) usa
+    contrato a ciegas: quien llama (`enviar_y_guardar` en app.envio) usa
     este id tanto para persistir `Mensaje.wa_message_id` como para
     contabilizar el costo estimado (specs/spec-costo-whatsapp-meta.md) — sin
     id no hay ninguna de las dos cosas, nunca se inventa ni se deriva de otro

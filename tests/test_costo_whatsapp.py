@@ -16,7 +16,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from app import main as main_mod
+from app import envio as envio_mod
 from app.config import config
 from app.costo_meta import CATEGORIA_SERVICE, consumo_mensual
 from app.db import SessionLocal
@@ -108,7 +108,7 @@ def test_meta_rechaza_el_envio_no_contabiliza_costo(client, meta_enviados, monke
     def meta_caido(telefono: str, texto: str) -> dict:
         raise RuntimeError("Meta no responde")
 
-    monkeypatch.setattr(main_mod.meta_client, "enviar_mensaje_texto", meta_caido)
+    monkeypatch.setattr(envio_mod.meta_client, "enviar_mensaje_texto", meta_caido)
 
     _post_mensaje(client, "wamid.entrante-error", "hola")
 

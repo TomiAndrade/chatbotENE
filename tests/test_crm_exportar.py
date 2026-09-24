@@ -58,6 +58,28 @@ def test_exportar_distingue_usuario_bot_y_humano(cliente_crm, usuario_crm, db):
     assert "### Humano —" in texto
 
 
+def test_exportar_incluye_autor_humano_cuando_existe_y_tolera_null(
+    cliente_crm, usuario_crm, db
+):
+    login_crm(cliente_crm, usuario_crm)
+    conversacion = crear_conversacion(
+        db,
+        NUMERO_DE_PRUEBA,
+        [
+            (RolMensaje.HUMANO, "sin autor conocido", 2),
+            (RolMensaje.HUMANO, "con autor conocido", 1),
+        ],
+    )
+    mensajes = db.query(Mensaje).filter_by(conversacion_id=conversacion.id).order_by(Mensaje.id).all()
+    mensajes[1].autor_crm_id = usuario_crm.id
+    db.commit()
+
+    texto = cliente_crm.get(f"/crm/api/conversaciones/{conversacion.id}/exportar").content.decode("utf-8")
+
+    assert "### Humano —" in texto
+    assert f"### Humano ({usuario_crm.usuario}) —" in texto
+
+
 def test_exportar_trae_el_historial_completo_aunque_supere_una_pagina(cliente_crm, usuario_crm, db):
     """La misma prueba que ya hace test_crm_historial.py con `mensajes_de`
     (paginado), pero para la exportación: acá no puede haber "hay_anteriores",

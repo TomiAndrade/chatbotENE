@@ -54,7 +54,6 @@ dormidos, no eliminados — POST /webhook ya no los llama, pero el código y sus
 tests siguen ahí por si más adelante Meta habilita Coexistence.
 """
 
-import enum
 import json
 import logging
 import threading
@@ -67,16 +66,31 @@ from fastapi.responses import PlainTextResponse
 from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 
-from app import mensajes
+from app import agrupamiento, atencion, mensajes
 from app.config import config
-from app.costo_meta import contabilizar_envio, liberar_reserva, mes_actual, reservar_gasto
 from app.crm.auth import crm_habilitado
 from app.crm.rutas import router as crm_router
 from app.db import SessionLocal, crear_engine, init_db, obtener_engine
+from app.envio import (
+    ResultadoEnvio,
+    enviar_aviso_escalamiento,
+    enviar_y_guardar,
+    enmascarar_identificador,
+    meta_client,
+)
 from app.historial import construir_historial
 from app.limite import mensajes_ultima_hora
-from app.meta import MetaClient, extraer_wa_message_id, verificar_challenge, verificar_firma_webhook
-from app.models import CANAL_WHATSAPP, Conversacion, LlamadaIA, Mensaje, MotivoPausa, ResultadoLlamadaIA, RolMensaje
+from app.meta import verificar_challenge, verificar_firma_webhook
+from app.models import (
+    CANAL_WHATSAPP,
+    TIPO_TEXTO,
+    Conversacion,
+    LlamadaIA,
+    Mensaje,
+    MotivoPausa,
+    ResultadoLlamadaIA,
+    RolMensaje,
+)
 from app.pausa import pausa_vigente
 from app.respuesta import ErrorTransitorioProveedor, generar_respuesta
 from app.tiempos import Cronometro
@@ -117,14 +131,13 @@ logging.basicConfig(level=logging.DEBUG if config.debug else logging.INFO, handl
 logger = logging.getLogger("bot")
 
 app = FastAPI(title="Bot WhatsApp ENE IA LAB")
-meta_client = MetaClient()
 
-# El único `messages[].type` que la Cloud API de Meta manda y que hoy se
-# trata como soportado (ver specs/spec-adjuntos-no-soportados.md). Es el
-# default de `tipo` en `procesar_mensaje_entrante`, a propósito: antes de esa
-# entrega todo mensaje se trataba como texto, y ningún llamador interno que
-# no conozca la metadata real del webhook tiene por qué cambiar.
-TIPO_TEXTO = "text"
+# TIPO_TEXTO (app/models.py): el único `messages[].type` que la Cloud API de
+# Meta manda y que hoy se trata como soportado (ver
+# specs/spec-adjuntos-no-soportados.md). Es el default de `tipo` en
+# `procesar_mensaje_entrante`, a propósito: antes de esa entrega todo mensaje
+# se trataba como texto, y ningún llamador interno que no conozca la
+# metadata real del webhook tiene por qué cambiar.
 
 # Referencia de módulo reemplazable, no una llamada directa a time.sleep en
 # cada punto donde hace falta esperar (ver specs/spec-agrupamiento-mensajes.md,
@@ -214,18 +227,6 @@ def al_apagar() -> None:
     meta_client.cerrar()
 
 
-def enmascarar_identificador(identificador: str) -> str:
-    """Muestra los primeros 4 y los últimos 2 caracteres, el resto tapado.
-
-    Pensada originalmente para números de WhatsApp, pero no asume ese formato:
-    no valida dígitos ni longitud de país, solo tapa el medio de la cadena.
-    Sirve igual para un id de sesión de otro canal.
-    """
-    if len(identificador) <= 6:
-        return "*" * len(identificador)
-    return identificador[:4] + "*" * (len(identificador) - 6) + identificador[-2:]
-
-
 def buscar_o_crear_conversacion(db, canal: str, identificador_externo: str) -> Conversacion:
     conversacion = (
         db.query(Conversacion).filter_by(canal=canal, identificador_externo=identificador_externo).first()
@@ -258,173 +259,18 @@ def _ya_escalada(conversacion: Conversacion) -> bool:
     perdería entero (sin resumen, sin escalada_en, sin aviso) y la
     conversación volvería al bot cuando la pausa manual expire, sin que nadie
     se haya enterado de que hacía falta un humano. Eso pasaba antes de que
-    existiera `motivo_pausa`."""
-    return conversacion.modo_humano and conversacion.motivo_pausa == MotivoPausa.ESCALAMIENTO
+    existiera `motivo_pausa`.
 
-
-def esta_en_modo_humano(db, conversacion: Conversacion) -> bool:
-    """Re-lee modo_humano de la base, sin confiar en lo que tenga cargado la
-    sesión, y aplica la expiración por tiempo de la pausa manual (ver
-    `pausa_vigente`, en app/pausa.py).
-
-    Hace falta porque entre el chequeo de modo_humano de
-    `procesar_mensaje_entrante` y el momento de enviar puede pasar bastante
-    tiempo: la llamada al modelo tiene un presupuesto de 20 segundos, y en esa
-    ventana otra entrega concurrente del mismo número puede haber escalado, o
-    alguien del equipo puede haber marcado la conversación a mano. Si no se
-    vuelve a mirar, el bot escribe encima de un humano — que es exactamente lo
-    que el criterio de aceptación 4 del spec-etapa2.md prohíbe.
-    """
-    db.refresh(conversacion)
-    return pausa_vigente(conversacion, datetime.now(timezone.utc))
-
-
-class ResultadoEnvio(str, enum.Enum):
-    """Qué pasó al llamar a `enviar_y_guardar()` (specs/spec-tope-duro-meta.md,
-    etapa 2.1). Antes la función devolvía `bool`, y un `False` no alcanzaba
-    para distinguir "la conversación ya está en modo humano" de "Meta
-    rechazó el envío" de "no se llegó a intentar, bloqueado por
-    presupuesto" — tres motivos con implicancias distintas para quien llama.
-    `EXITOSO` es el único caso en el que el mensaje salió de verdad."""
-
-    EXITOSO = "exitoso"
-    MODO_HUMANO = "modo_humano"
-    FALLO_META = "fallo_meta"
-    BLOQUEADO_PRESUPUESTO = "bloqueado_presupuesto"
-
-
-def enviar_y_guardar(
-    db,
-    conversacion: Conversacion,
-    texto: str,
-    aunque_este_en_modo_humano: bool = False,
-) -> ResultadoEnvio:
-    """Envía un texto por la Cloud API de Meta y, si se pudo mandar, lo guarda como mensaje
-    del bot. Se usa tanto para la respuesta del modelo como para los avisos
-    de escalamiento, límite y error: todos son mensajes "del bot" a efectos
-    del historial.
-
-    Antes de enviar vuelve a mirar modo_humano (ver `esta_en_modo_humano`) y
-    descarta el mensaje si la conversación ya pasó a una persona. La única
-    excepción es el aviso de escalamiento, que se manda justo después de
-    prender modo_humano y por eso llega con
-    `aunque_este_en_modo_humano=True`.
-
-    Devuelve `ResultadoEnvio.EXITOSO` si el mensaje salió; `MODO_HUMANO` si
-    se descartó porque la conversación ya pasó a una persona; `FALLO_META`
-    si Meta rechazó o falló el envío; `BLOQUEADO_PRESUPUESTO` si
-    `META_TOPE_DURO_HABILITADO=true` y el mes ya no tiene presupuesto para
-    este envío — en ese caso ni siquiera se llega a llamar a Meta.
-
-    Condición exacta para "contabilizado" (control preventivo de gasto,
-    specs/spec-costo-whatsapp-meta.md): Meta tiene que haber aceptado el POST
-    (no haber tirado `httpx.HTTPError`, sea cual sea el motivo) **y** haber
-    devuelto un `wa_message_id` (`messages[0].id`). Si Meta rechaza el envío,
-    no se contabiliza nada — se corta antes, en el `except` de abajo. Todo lo
-    que sale de acá cuenta igual (respuesta del modelo, aviso de
-    escalamiento, de límite o de error): los cuatro pasan por el mismo
-    chequeo. Contabilizamos de forma preventiva a partir de esa aceptación:
-    es una ESTIMACIÓN de gasto, no evidencia de facturación efectiva — el
-    sistema no concilia todavía contra la factura real de Meta.
-
-    Tope duro mensual (specs/spec-tope-duro-meta.md, etapa 2.1): con
-    `META_TOPE_DURO_HABILITADO=false` (el default) esta función se comporta
-    exactamente igual que antes de esta entrega — no reserva nada, no
-    bloquea nada. Prendido, reserva la tarifa contra el presupuesto del mes
-    ANTES de llamar a Meta (`reservar_gasto`, una única sentencia `UPDATE`
-    atómica — nunca "sumar -> comprobar saldo -> enviar -> registrar", que
-    dejaría una ventana de carrera entre envíos concurrentes). Si la reserva
-    no entra, no se llama a Meta. Si Meta rechaza/falla el envío después de
-    haber reservado, la reserva se libera (`liberar_reserva`). Si Meta
-    acepta, la reserva queda — tanto si el guardado posterior de
-    `Mensaje`/`EnvioWhatsapp` sale bien como si sale mal: liberarla en ese
-    segundo caso dejaría que el tope real se corra hacia arriba cada vez que
-    pase (ver el docstring de `PresupuestoMetaMensual`).
-    """
-    identificador_externo = conversacion.identificador_externo
-
-    if not aunque_este_en_modo_humano and esta_en_modo_humano(db, conversacion):
-        logger.info(
-            "La conversación con %s pasó a modo humano mientras se generaba la "
-            "respuesta: no se envía nada para no escribir encima de la persona",
-            enmascarar_identificador(identificador_externo),
-        )
-        return ResultadoEnvio.MODO_HUMANO
-
-    # Tope duro mensual (specs/spec-tope-duro-meta.md). Con el flag apagado
-    # `mes_reservado` queda None y nada de lo de abajo se toca: ni se
-    # reserva antes de llamar a Meta, ni se libera si Meta falla.
-    mes_reservado = None
-    if config.meta_tope_duro_habilitado:
-        mes_reservado = mes_actual(datetime.now(timezone.utc))
-        if not reservar_gasto(db, mes_reservado):
-            logger.warning(
-                "Envío a %s bloqueado por el tope mensual de presupuesto (mes=%s): no se llama a Meta",
-                enmascarar_identificador(identificador_externo), mes_reservado,
-            )
-            return ResultadoEnvio.BLOQUEADO_PRESUPUESTO
-
-    # Mide la llamada entera, reintentos y esperas de backoff incluidos (ver
-    # MAX_REINTENTOS en app/meta.py): es lo que espera el usuario del otro
-    # lado, no lo que tarda un intento suelto. Si hubo reintentos, quedan a la
-    # vista en los WARNING que loguea el cliente de Meta.
-    cronometro_envio = Cronometro()
-    try:
-        respuesta_meta = meta_client.enviar_mensaje_texto(identificador_externo, texto)
-    except Exception:
-        logger.info(
-            "TIEMPOS %s | envío a Meta (fallo): %.0f ms",
-            enmascarar_identificador(identificador_externo), cronometro_envio.ms(),
-        )
-        logger.exception("No se pudo enviar un mensaje a %s", enmascarar_identificador(identificador_externo))
-        if mes_reservado is not None:
-            liberar_reserva(db, mes_reservado)
-        return ResultadoEnvio.FALLO_META
-    logger.info(
-        "TIEMPOS %s | envío a Meta: %.0f ms",
-        enmascarar_identificador(identificador_externo), cronometro_envio.ms(),
+    Una atención iniciada desde el CRM (`ATENCION_CRM`) sí cuenta: ya hay
+    una persona a cargo con una pausa que no vence, así que un escalamiento
+    no agrega nada, y el aviso de "te pasamos con alguien" le llegaría al
+    usuario en medio de esa atención. Por el mismo motivo, el flujo dormido
+    de intervención manual (`registrar_intervencion_humana`) no la convierte
+    en una pausa que vence."""
+    return conversacion.modo_humano and conversacion.motivo_pausa in (
+        MotivoPausa.ESCALAMIENTO,
+        MotivoPausa.ATENCION_CRM,
     )
-
-    # El id real que asignó Meta (ver app.meta.extraer_wa_message_id). Sin él
-    # no hay con qué correlacionar sent -> delivered/read en una etapa futura
-    # ni con qué contabilizar el costo estimado — nunca se inventa ni se
-    # deriva del id interno de mensaje_bot.
-    wa_message_id = extraer_wa_message_id(respuesta_meta)
-    if not wa_message_id:
-        logger.warning(
-            "Meta aceptó el envío a %s pero la respuesta no trajo messages[0].id: "
-            "queda sin wa_message_id y sin contabilizar en el costo estimado",
-            enmascarar_identificador(identificador_externo),
-        )
-
-    mensaje_bot = Mensaje(
-        conversacion_id=conversacion.id,
-        rol=RolMensaje.BOT,
-        contenido=texto,
-        wa_message_id=wa_message_id,
-    )
-    db.add(mensaje_bot)
-    conversacion.ultimo_mensaje_en = datetime.now(timezone.utc)
-
-    if wa_message_id:
-        # flush (no commit): hace falta el id de mensaje_bot para la FK de
-        # EnvioWhatsapp, pero las dos filas se comitean juntas más abajo — no
-        # puede quedar una sin la otra.
-        db.flush()
-        contabilizar_envio(db, conversacion, mensaje_bot)
-
-    # Si esto falla (motivo de DB, no de Meta), la excepción se escapa sin
-    # capturar hacia el except general de responder()/agrupar_y_responder —
-    # mismo comportamiento que antes de esta entrega (ver
-    # specs/spec-costo-whatsapp-meta.md, "Flujo inspeccionado"). La reserva
-    # de más arriba, si la hubo, ya quedó comiteada en su propia
-    # transacción y no se toca acá, a propósito: es justamente el caso
-    # "Meta aceptó pero falló la persistencia" que el diseño del tope duro
-    # deja intencionalmente sin liberar (ver PresupuestoMetaMensual).
-    db.commit()
-
-    logger.info("Mensaje enviado a %s: %s", enmascarar_identificador(identificador_externo), texto)
-    return ResultadoEnvio.EXITOSO
 
 
 def escalar_a_humano(db, conversacion: Conversacion, resumen: str | None) -> None:
@@ -471,6 +317,9 @@ def escalar_a_humano(db, conversacion: Conversacion, resumen: str | None) -> Non
     conversacion.modo_humano_desde = ahora
     conversacion.resumen_escalamiento = resumen
     conversacion.escalada_en = ahora
+    # La tarjeta Pendiente del CRM nace en el mismo commit que la pausa: no
+    # puede quedar una conversación derivada que el equipo no vea.
+    atencion.abrir_por_escalamiento(db, conversacion, resumen)
     db.commit()
 
     # Va acá, pegado al commit, y no al final: si el envío del aviso falla, el
@@ -482,7 +331,7 @@ def escalar_a_humano(db, conversacion: Conversacion, resumen: str | None) -> Non
 
     ahora_local = datetime.now(config.timezone)
     aviso = mensajes.mensaje_escalamiento(ahora_local)
-    resultado_aviso = enviar_y_guardar(db, conversacion, aviso, aunque_este_en_modo_humano=True)
+    resultado_aviso = enviar_aviso_escalamiento(db, conversacion, aviso)
     if resultado_aviso != ResultadoEnvio.EXITOSO:
         logger.error(
             "La conversación con %s quedó escalada pero NO se pudo enviar el aviso de "
@@ -694,22 +543,13 @@ def _liberar_generacion(db, conversacion: Conversacion, token: str) -> None:
 
 
 def _avanzar_marca_de_agrupado(db, conversacion: Conversacion, mensaje_id: int) -> None:
-    """Mueve `ultimo_mensaje_agrupado_id` a `mensaje_id`, pero nunca hacia
-    atrás — mismo patrón de UPDATE condicional que `_reclamar_generacion`,
-    por la misma razón: hay más de un llamador que puede escribir esta
-    columna sin coordinarse entre sí (el dueño del lote, al terminar de
-    responder; y `procesar_mensaje_entrante`, cuando un mensaje de texto no
-    llega a entrar a ningún lote porque superó el límite por hora). Sin un
-    UPDATE atómico que solo avance el valor, el que commitea último "gana"
-    sin importar cuál de los dos mensajes es más nuevo, y un mensaje que ya
-    se marcó como fuera de lote podría volver a quedar pendiente."""
-    db.query(Conversacion).filter(
-        Conversacion.id == conversacion.id,
-        or_(
-            Conversacion.ultimo_mensaje_agrupado_id.is_(None),
-            Conversacion.ultimo_mensaje_agrupado_id < mensaje_id,
-        ),
-    ).update({"ultimo_mensaje_agrupado_id": mensaje_id}, synchronize_session=False)
+    """Envoltorio de `app.agrupamiento.avanzar_marca` que además comitea:
+    los dos llamadores de acá abajo (`agrupar_y_responder`,
+    `procesar_mensaje_entrante`) lo hacen como su propio paso, sin nada más
+    pendiente en la sesión — a diferencia de `app.atencion.resolver`, que
+    llama a la función de `app.agrupamiento` directo porque necesita que el
+    avance quede en el mismo commit que el cierre de la atención."""
+    agrupamiento.avanzar_marca(db, conversacion, mensaje_id)
     db.commit()
 
 

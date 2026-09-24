@@ -52,7 +52,11 @@ def _cuerpo_del_mensaje(mensaje: Mensaje) -> str:
     return mensaje.contenido
 
 
-def generar_markdown(conversacion: Conversacion, mensajes: list[Mensaje]) -> str:
+def generar_markdown(
+    conversacion: Conversacion,
+    mensajes: list[Mensaje],
+    autores: dict[int, str],
+) -> str:
     """El Markdown completo de `conversacion`. `mensajes` tiene que ser el
     historial entero, no una página — quien llama es responsable de traerlo
     así (`servicio.todos_los_mensajes`).
@@ -78,6 +82,8 @@ def generar_markdown(conversacion: Conversacion, mensajes: list[Mensaje]) -> str
     else:
         for mensaje in mensajes:
             rol = NOMBRE_DE_ROL.get(mensaje.rol, mensaje.rol.value)
+            if mensaje.rol == RolMensaje.HUMANO and mensaje.autor_crm_id in autores:
+                rol = f"{rol} ({autores[mensaje.autor_crm_id]})"
             lineas.append(f"### {rol} — {_fecha_local(mensaje.creado_en)}")
             lineas.append(_cuerpo_del_mensaje(mensaje))
             lineas.append("")

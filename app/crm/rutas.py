@@ -20,6 +20,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app import atencion
 from app.config import config
 from app.crm import exportar, intentos, metricas, servicio, sesiones, usuarios
 from app.crm.auth import (
@@ -32,6 +33,8 @@ from app.crm.auth import (
     verificar_csrf,
 )
 from app.crm.servicio import obtener_db
+from app.envio import ResultadoEnvio, enviar_respuesta_humana
+from app.meta import WHATSAPP_MAX_CARACTERES
 from app.pausa import reactivar_bot
 
 logger = logging.getLogger("bot")
@@ -278,12 +281,14 @@ def exportar_conversacion(
 
     GET y sin CSRF a propósito, igual que el resto de las lecturas del panel
     (`/api/conversaciones`, `/api/conversaciones/{id}/mensajes`): no escribe
-    nada, así que no aplica la protección que sí exigen reactivar y salir
+    nada, así que no aplica la protección que sí exigen las acciones de
+    atención, responder, reactivar y salir
     (ver `verificar_csrf` en app/crm/auth.py).
     """
     conversacion = _conversacion_o_404(db, conversacion_id)
     mensajes = servicio.todos_los_mensajes(db, conversacion)
-    contenido = exportar.generar_markdown(conversacion, mensajes)
+    autores = servicio.nombres_de_autores(db, mensajes)
+    contenido = exportar.generar_markdown(conversacion, mensajes, autores)
 
     logger.info(
         "CRM: %s exportó la conversación %s (%s mensajes)",
@@ -308,7 +313,12 @@ def reactivar_conversacion(
     sesion=Depends(requiere_sesion),
     db: Session = Depends(obtener_db),
 ):
-    """Apaga la pausa. Lo único que escribe el CRM sobre las conversaciones.
+    """Apaga la pausa.
+
+    Si la conversación tiene una atención abierta, esto **es** resolverla y
+    sigue las mismas reglas que `resolver_atencion`: solo su responsable, y
+    una pendiente hay que tomarla primero (409 en los dos casos). Si no,
+    este botón sería una forma de cerrar la atención de otra persona.
 
     No manda nada por WhatsApp ni vuelve a procesar mensajes viejos: deja la
     conversación como si nunca se hubiera pausado y el bot responde recién
@@ -318,8 +328,13 @@ def reactivar_conversacion(
     verificar_csrf(request, sesion)
     conversacion = _conversacion_o_404(db, conversacion_id)
 
-    reactivar_bot(conversacion)
-    db.commit()
+    abierta = atencion.atencion_abierta(db, conversacion.id)
+    if abierta is not None:
+        _resolver_o_409(db, abierta, sesion.usuario.id)
+        db.refresh(conversacion)
+    else:
+        reactivar_bot(conversacion)
+        db.commit()
 
     logger.info(
         "CRM: %s reactivó el bot en la conversación %s", sesion.usuario.usuario, conversacion.id,
@@ -327,6 +342,240 @@ def reactivar_conversacion(
     return {
         "conversacion": servicio.detalle_conversacion(db, conversacion),
         "mensaje": MENSAJE_BOT_REACTIVADO,
+    }
+
+
+# --- Atención humana (app/atencion.py) -----------------------------------
+#
+# Las acciones van por conversación y no por id de atención: una conversación
+# tiene como mucho una atención abierta, así que el panel no necesita
+# conocer otro id. Todas escriben, así que todas exigen CSRF.
+
+ERROR_ATENCION_YA_ABIERTA = "Esta conversación ya tiene una atención abierta."
+ERROR_ATENCION_NO_DISPONIBLE = "Otra persona ya tomó esta conversación o ya se resolvió."
+ERROR_SIN_ATENCION_ABIERTA = "Esta conversación no tiene una atención abierta."
+ERROR_ATENCION_SIN_TOMAR = "Para resolver esta conversación, primero hay que tomarla."
+ERROR_ATENCION_AJENA = "Esta conversación la tiene otra persona: solo quien la tomó puede resolverla."
+
+# Un código por motivo de rechazo del flujo de atención humana (iniciar,
+# tomar, resolver, reactivar cuando hay una atención de por medio, y
+# responder). Todos los errores propios de ese flujo van por
+# `_error_estructurado`, nunca por un `detail` de string suelto — así el
+# Kanban tiene un único contrato para los ocho, en vez de tener que
+# distinguir "string" de "{code, message}" según qué acción falló.
+CODIGO_ATENCION_YA_ABIERTA = "atencion_ya_abierta"
+CODIGO_SIN_ATENCION_ABIERTA = "sin_atencion_abierta"
+CODIGO_ATENCION_NO_DISPONIBLE = "atencion_no_disponible"
+CODIGO_ATENCION_SIN_TOMAR = "atencion_sin_tomar"
+CODIGO_ATENCION_AJENA = "atencion_ajena"
+CODIGO_PRESUPUESTO_AGOTADO = "presupuesto_agotado"
+CODIGO_FUERA_DE_VENTANA = "fuera_de_ventana"
+CODIGO_FALLO_META = "fallo_meta"
+CODIGO_TEXTO_INVALIDO = "texto_invalido"
+
+
+class DatosRespuestaHumana(BaseModel):
+    # Sin `min_length` a propósito: un `Field(min_length=1)` rechaza
+    # `{"texto": ""}` en la validación de Pydantic, antes de que el cuerpo
+    # del endpoint corra — y ese 422 sale con el formato genérico de FastAPI
+    # (una lista de errores), no con `{code, message}` como el resto de esta
+    # sección. La validación de contenido (vacío tras `strip()`, demasiado
+    # largo) la hace `responder_atencion` a mano, así que un texto vacío da
+    # el mismo 422 estructurado que uno demasiado largo.
+    texto: str
+
+
+def _error_estructurado(status_code: int, codigo: str, mensaje: str) -> HTTPException:
+    """Único formato de error propio del flujo de atención humana (iniciar,
+    tomar, resolver, reactivar-cuando-hay-atención, responder):
+    `detail={"code": ..., "message": ...}`. Nunca un `detail` de string
+    suelto para estas ocho acciones — eso queda para el resto del CRM,
+    fuera del alcance de esta unificación."""
+    return HTTPException(
+        status_code=status_code,
+        detail={"code": codigo, "message": mensaje},
+    )
+
+
+def _resolver_o_409(db: Session, abierta, usuario_id: int):
+    """Resuelve con las reglas de `atencion.resolver` y traduce cada motivo
+    de rechazo a un 409 estructurado. Lo usan "Resolver" y "Reactivar bot",
+    que con una atención abierta son la misma acción."""
+    try:
+        return atencion.resolver(db, abierta, usuario_id)
+    except atencion.AtencionSinTomar:
+        raise _error_estructurado(409, CODIGO_ATENCION_SIN_TOMAR, ERROR_ATENCION_SIN_TOMAR)
+    except atencion.AtencionAjena:
+        raise _error_estructurado(409, CODIGO_ATENCION_AJENA, ERROR_ATENCION_AJENA)
+    except atencion.AtencionNoDisponible:
+        raise _error_estructurado(409, CODIGO_ATENCION_NO_DISPONIBLE, ERROR_ATENCION_NO_DISPONIBLE)
+
+
+def _atencion_abierta_o_404(db: Session, conversacion_id: int):
+    abierta = atencion.atencion_abierta(db, conversacion_id)
+    if abierta is None:
+        raise _error_estructurado(404, CODIGO_SIN_ATENCION_ABIERTA, ERROR_SIN_ATENCION_ABIERTA)
+    return abierta
+
+
+def _respuesta_de_atencion(db: Session, conversacion, de_la_conversacion) -> dict:
+    return {
+        "atencion": servicio.atencion_a_dict(db, de_la_conversacion),
+        "conversacion": servicio.detalle_conversacion(db, conversacion),
+    }
+
+
+@router.post("/api/conversaciones/{conversacion_id}/atencion", status_code=201)
+def iniciar_atencion(
+    conversacion_id: int,
+    request: Request,
+    sesion=Depends(requiere_sesion),
+    db: Session = Depends(obtener_db),
+):
+    """Iniciar una atención desde la vista general. El bot se pausa en el
+    acto. La atención queda pendiente y sin responsable: asignársela es
+    "tomar", un paso aparte."""
+    verificar_csrf(request, sesion)
+    conversacion = _conversacion_o_404(db, conversacion_id)
+
+    try:
+        nueva = atencion.iniciar_desde_crm(db, conversacion, sesion.usuario.id)
+    except atencion.AtencionYaAbierta:
+        raise _error_estructurado(409, CODIGO_ATENCION_YA_ABIERTA, ERROR_ATENCION_YA_ABIERTA)
+
+    logger.info(
+        "CRM: %s inició la atención %s en la conversación %s",
+        sesion.usuario.usuario, nueva.id, conversacion.id,
+    )
+    return _respuesta_de_atencion(db, conversacion, nueva)
+
+
+@router.post("/api/conversaciones/{conversacion_id}/atencion/tomar")
+def tomar_atencion(
+    conversacion_id: int,
+    request: Request,
+    sesion=Depends(requiere_sesion),
+    db: Session = Depends(obtener_db),
+):
+    """Quedarse con la atención. Si otra persona la tomó primero, 409."""
+    verificar_csrf(request, sesion)
+    conversacion = _conversacion_o_404(db, conversacion_id)
+    abierta = _atencion_abierta_o_404(db, conversacion.id)
+
+    try:
+        tomada = atencion.tomar(db, abierta, sesion.usuario.id)
+    except atencion.AtencionNoDisponible:
+        raise _error_estructurado(409, CODIGO_ATENCION_NO_DISPONIBLE, ERROR_ATENCION_NO_DISPONIBLE)
+
+    logger.info(
+        "CRM: %s tomó la atención %s de la conversación %s",
+        sesion.usuario.usuario, tomada.id, conversacion.id,
+    )
+    return _respuesta_de_atencion(db, conversacion, tomada)
+
+
+@router.post("/api/conversaciones/{conversacion_id}/atencion/resolver")
+def resolver_atencion(
+    conversacion_id: int,
+    request: Request,
+    sesion=Depends(requiere_sesion),
+    db: Session = Depends(obtener_db),
+):
+    """Cerrar la atención y devolverle la conversación al bot. No manda nada
+    por WhatsApp: el bot contesta recién el próximo mensaje entrante.
+
+    Solo la resuelve su responsable. Una pendiente hay que tomarla primero, y
+    una ajena devuelve 409. Una que ya se cerró devuelve 404: la conversación
+    ya no tiene atención abierta. Queda registrado quién resolvió
+    (`resuelta_por`)."""
+    verificar_csrf(request, sesion)
+    conversacion = _conversacion_o_404(db, conversacion_id)
+    abierta = _atencion_abierta_o_404(db, conversacion.id)
+
+    resuelta = _resolver_o_409(db, abierta, sesion.usuario.id)
+
+    logger.info(
+        "CRM: %s resolvió la atención %s de la conversación %s",
+        sesion.usuario.usuario, resuelta.id, conversacion.id,
+    )
+    db.refresh(conversacion)
+    return {**_respuesta_de_atencion(db, conversacion, resuelta), "mensaje": MENSAJE_BOT_REACTIVADO}
+
+
+@router.post("/api/conversaciones/{conversacion_id}/atencion/responder", status_code=201)
+def responder_atencion(
+    conversacion_id: int,
+    datos: DatosRespuestaHumana,
+    request: Request,
+    sesion=Depends(requiere_sesion),
+    db: Session = Depends(obtener_db),
+):
+    """Envía texto libre como la persona responsable de la atención.
+
+    El autor sale siempre de la sesión. La autorización se vuelve a validar
+    con bloqueo en `app.envio` inmediatamente antes de llamar a Meta.
+    """
+    verificar_csrf(request, sesion)
+    conversacion = _conversacion_o_404(db, conversacion_id)
+
+    texto = datos.texto.strip()
+    if not texto or len(texto) > WHATSAPP_MAX_CARACTERES:
+        raise _error_estructurado(
+            422,
+            CODIGO_TEXTO_INVALIDO,
+            f"El texto debe tener entre 1 y {WHATSAPP_MAX_CARACTERES} caracteres.",
+        )
+
+    try:
+        procesado = enviar_respuesta_humana(
+            db,
+            conversacion_id=conversacion.id,
+            texto=texto,
+            autor_crm_id=sesion.usuario.id,
+        )
+    except atencion.AtencionSinTomar:
+        raise _error_estructurado(409, CODIGO_ATENCION_SIN_TOMAR, ERROR_ATENCION_SIN_TOMAR)
+    except atencion.AtencionAjena:
+        raise _error_estructurado(409, CODIGO_ATENCION_AJENA, ERROR_ATENCION_AJENA)
+    except atencion.AtencionNoDisponible:
+        raise _error_estructurado(409, CODIGO_ATENCION_NO_DISPONIBLE, ERROR_ATENCION_NO_DISPONIBLE)
+
+    if procesado.resultado == ResultadoEnvio.BLOQUEADO_PRESUPUESTO:
+        raise _error_estructurado(
+            409,
+            CODIGO_PRESUPUESTO_AGOTADO,
+            "El presupuesto mensual no permite enviar este mensaje.",
+        )
+    if procesado.resultado == ResultadoEnvio.FUERA_DE_VENTANA:
+        raise _error_estructurado(
+            409,
+            CODIGO_FUERA_DE_VENTANA,
+            "La ventana de atención de 24 horas está cerrada.",
+        )
+    if procesado.resultado == ResultadoEnvio.FALLO_META:
+        raise _error_estructurado(
+            502,
+            CODIGO_FALLO_META,
+            "Meta no aceptó el mensaje para envío.",
+        )
+    if procesado.resultado != ResultadoEnvio.EXITOSO or procesado.mensaje is None:
+        logger.error(
+            "Resultado inesperado enviando respuesta humana en conversación %s: %s",
+            conversacion.id, procesado.resultado,
+        )
+        raise _error_estructurado(502, CODIGO_FALLO_META, "No se pudo aceptar el mensaje para envío.")
+
+    logger.info(
+        "CRM: %s respondió en la conversación %s (mensaje=%s)",
+        sesion.usuario.usuario, conversacion.id, procesado.mensaje.id,
+    )
+    db.refresh(conversacion)
+    abierta = atencion.atencion_abierta(db, conversacion.id)
+    return {
+        "status": "aceptado_por_meta",
+        "mensaje": servicio.mensaje_a_dict(db, procesado.mensaje),
+        "atencion": servicio.atencion_a_dict(db, abierta) if abierta is not None else None,
+        "conversacion": servicio.detalle_conversacion(db, conversacion),
     }
 
 

@@ -99,6 +99,27 @@ def test_el_historial_diferencia_usuario_bot_y_equipo_con_su_fecha(cliente_crm, 
         assert datetime.fromisoformat(mensaje["creado_en"]).tzinfo is not None
 
 
+def test_el_historial_muestra_autor_humano_y_tolera_historico_sin_autor(
+    cliente_crm, usuario_crm, db
+):
+    login_crm(cliente_crm, usuario_crm)
+    conversacion = crear_conversacion(
+        db,
+        NUMERO_CON_NUEVE,
+        [
+            (RolMensaje.HUMANO, "mensaje histórico", 2),
+            (RolMensaje.HUMANO, "mensaje con autor", 1),
+        ],
+    )
+    mensajes = db.query(Mensaje).filter_by(conversacion_id=conversacion.id).order_by(Mensaje.id).all()
+    mensajes[1].autor_crm_id = usuario_crm.id
+    db.commit()
+
+    datos = cliente_crm.get(f"/crm/api/conversaciones/{conversacion.id}/mensajes").json()
+
+    assert [mensaje["autor"] for mensaje in datos["mensajes"]] == [None, usuario_crm.usuario]
+
+
 def test_el_historial_largo_se_pide_por_paginas(cliente_crm, usuario_crm, db):
     """Al abrir se ven los últimos mensajes; los anteriores se piden con
     `antes_de`, que es lo que hace el botón "Cargar mensajes anteriores"."""

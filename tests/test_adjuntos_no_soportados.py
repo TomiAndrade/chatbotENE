@@ -8,6 +8,7 @@ no los reimplementa.
 
 import json
 
+from app import envio as envio_mod
 from app import main as main_mod
 from app.config import config
 from app.db import SessionLocal
@@ -233,7 +234,7 @@ def test_si_falla_el_envio_de_la_respuesta_de_adjunto_no_rompe_ni_escala(client,
     def meta_caido(telefono, texto):
         raise RuntimeError("Meta no responde")
 
-    monkeypatch.setattr(main_mod.meta_client, "enviar_mensaje_texto", meta_caido)
+    monkeypatch.setattr(envio_mod.meta_client, "enviar_mensaje_texto", meta_caido)
 
     with caplog.at_level("ERROR", logger="bot"):
         respuesta = _post(client, payload_meta_adjunto("wamid.envio-roto", TELEFONO_DE_PRUEBA, "image"))
